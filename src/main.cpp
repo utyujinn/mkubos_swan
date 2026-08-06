@@ -3,6 +3,7 @@
 #include <iostream>
 #include <random>
 #include <utility>
+#include <chrono>
 
 #include "context.hpp"
 #include "decode.hpp"
@@ -327,7 +328,8 @@ int main(int argc, char* argv[]) {
   swan::Tensor1dLogits ctx_logits;
   swan::Tensor1d ctx_final_norm;
 
-  clock_t start_clk = clock();
+  //clock_t start_clk = clock();
+  auto start_time = std::chrono::high_resolution_clock::now();
 
   int next;
   int token = 1; // BOS (Begin of Sequence)
@@ -385,12 +387,12 @@ int main(int argc, char* argv[]) {
   std::cout << "\n";
 
   // 7. Print the time and speed.
-  clock_t end_clk = clock();
+  /*clock_t end_clk = clock();
   double decode_time = (double)(end_clk - start_clk) / CLOCKS_PER_SEC;
   std::cout << "Time : " << decode_time << "[s]" << std::endl
             << "Speed: " << args.max_seq / decode_time << "[tok/s]"
             << std::endl;
-
+*/
 #ifndef USE_CPU_ONLY
   // 8. Flush OpenCL Device Memory
   OCL_CHECK(err, err = q.enqueueUnmapMemObject(buffer_a, ptr_a));
@@ -398,6 +400,14 @@ int main(int argc, char* argv[]) {
   OCL_CHECK(err, err = q.enqueueUnmapMemObject(buffer_result, ptr_result));
   OCL_CHECK(err, err = q.finish());
 #endif // USE_CPU_ONLY
+
+  // 7. Print the time and speed.
+  auto end_time = std::chrono::high_resolution_clock::now();
+  double decode_time = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+
+  std::cout << "Total : " << decode_time / 1000.0 << "[s]" << std::endl
+            << "Speed: " << args.max_seq / (decode_time/1000.0) << "[tok/s]"
+            << std::endl;
 
   return 0;
 }
