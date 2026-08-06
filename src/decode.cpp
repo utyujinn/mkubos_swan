@@ -14,13 +14,22 @@ void Decode(int tok, // new token
             const Weights& w
 #ifndef USE_CPU_ONLY
             ,
-            cl::CommandQueue q, cl::Kernel kernel_matmul, cl::Kernel kernel_mul,
+            cl::CommandQueue q,
+            cl::CommandQueue q1, cl::CommandQueue q2, cl::CommandQueue q3,
+            cl::Kernel kernel_matmul_1, cl::Kernel kernel_matmul_2, cl::Kernel kernel_matmul_3,
+            cl::Kernel kernel_mul,
             cl::Kernel kernel_rmsnorm, cl::Kernel kernel_softmax,
-            cl::Kernel kernel_add, cl::Kernel kernel_rope, float* ptr_a,
-            float* ptr_b, float* ptr_c, float* ptr_d, float* ptr_result,
-            float* ptr_result2, cl::Buffer buffer_a, cl::Buffer buffer_b,
+            cl::Kernel kernel_add, cl::Kernel kernel_rope,
+            float* ptr_a, float* ptr_b, float* ptr_c, float* ptr_d, float* ptr_result, float* ptr_result2,
+            float* ptr_a_1, float* ptr_b_1, float* ptr_result_1,
+            float* ptr_a_2, float* ptr_b_2, float* ptr_result_2,
+            float* ptr_a_3, float* ptr_b_3, float* ptr_result_3,
+            cl::Buffer buffer_a, cl::Buffer buffer_b,
             cl::Buffer buffer_c, cl::Buffer buffer_d, cl::Buffer buffer_result,
-            cl::Buffer buffer_result2
+            cl::Buffer buffer_result2,
+            cl::Buffer buffer_a_1, cl::Buffer buffer_b_1, cl::Buffer buffer_result_1,
+            cl::Buffer buffer_a_2, cl::Buffer buffer_b_2, cl::Buffer buffer_result_2,
+            cl::Buffer buffer_a_3, cl::Buffer buffer_b_3, cl::Buffer buffer_result_3
 #endif // USE_CPU_ONLY
 ) {
 
@@ -56,7 +65,7 @@ void Decode(int tok, // new token
 
     // 2. Weight Multiple
 #ifndef USE_CPU_ONLY
-    MatmulFPGA(ctx.attn_wqx[i_layer], ctx.attn_norm[i_layer],
+    /*MatmulFPGA(ctx.attn_wqx[i_layer], ctx.attn_norm[i_layer],
                w.attn_wq[i_layer], q, kernel_matmul, ptr_a, ptr_b, ptr_result,
                buffer_a, buffer_b, buffer_result);
     MatmulFPGA(ctx.attn_wkx[i_layer], ctx.attn_norm[i_layer],
@@ -64,7 +73,13 @@ void Decode(int tok, // new token
                buffer_a, buffer_b, buffer_result);
     MatmulFPGA(ctx.attn_wvx[i_layer], ctx.attn_norm[i_layer],
                w.attn_wv[i_layer], q, kernel_matmul, ptr_a, ptr_b, ptr_result,
-               buffer_a, buffer_b, buffer_result);
+               buffer_a, buffer_b, buffer_result);*/
+	MatmulParaFPGA(ctx.attn_wqx[i_layer], ctx.attn_norm[i_layer], w.attn_wq[i_layer],
+					ctx.attn_wkx[i_layer], /*ctx.attn_norm[i_layer],*/ w.attn_wk[i_layer],
+					ctx.attn_wvx[i_layer], /*ctx.attn_norm[i_layer],*/ w.attn_wv[i_layer],
+					q1, kernel_matmul_1, ptr_a_1, ptr_b_1, ptr_result_1,buffer_a_1, buffer_b_1, buffer_result_1,
+					q2, kernel_matmul_2, ptr_a_2, ptr_b_2, ptr_result_2,buffer_a_2, buffer_b_2, buffer_result_2,
+					q3, kernel_matmul_3, ptr_a_3, ptr_b_3, ptr_result_3,buffer_a_3, buffer_b_3, buffer_result_3);
 #else
     Matmul(ctx.attn_wqx[i_layer], ctx.attn_norm[i_layer], w.attn_wq[i_layer]);
     Matmul(ctx.attn_wkx[i_layer], ctx.attn_norm[i_layer], w.attn_wk[i_layer]);
@@ -125,8 +140,8 @@ void Decode(int tok, // new token
     // 6. Output (Merge Heads)
 #ifndef USE_CPU_ONLY
     MatmulFPGA(ctx.attn_out[i_layer], ctx.attn_val[i_layer], w.attn_wo[i_layer],
-               q, kernel_matmul, ptr_a, ptr_b, ptr_result, buffer_a, buffer_b,
-               buffer_result);
+               q1, kernel_matmul_1, ptr_a_1, ptr_b_1, ptr_result_1, buffer_a_1, buffer_b_1,
+               buffer_result_1);
 #else
     Matmul(ctx.attn_out[i_layer], ctx.attn_val[i_layer], w.attn_wo[i_layer]);
 #endif
@@ -154,8 +169,8 @@ void Decode(int tok, // new token
     // 2. w1 . x
 #ifndef USE_CPU_ONLY
     MatmulFPGA(ctx.ffn_w1x[i_layer], ctx.ffn_norm[i_layer], w.ffn_w1[i_layer],
-               q, kernel_matmul, ptr_a, ptr_b, ptr_result, buffer_a, buffer_b,
-               buffer_result);
+               q1, kernel_matmul_1, ptr_a_1, ptr_b_1, ptr_result_1, buffer_a_1, buffer_b_1,
+               buffer_result_1);
 #else
     Matmul(ctx.ffn_w1x[i_layer], ctx.ffn_norm[i_layer], w.ffn_w1[i_layer]);
 #endif
@@ -163,8 +178,8 @@ void Decode(int tok, // new token
     // 3. w3 . x
 #ifndef USE_CPU_ONLY
     MatmulFPGA(ctx.ffn_w3x[i_layer], ctx.ffn_norm[i_layer], w.ffn_w3[i_layer],
-               q, kernel_matmul, ptr_a, ptr_b, ptr_result, buffer_a, buffer_b,
-               buffer_result);
+               q1, kernel_matmul_1, ptr_a_1, ptr_b_1, ptr_result_1, buffer_a_1, buffer_b_1,
+               buffer_result_1);
 #else
     Matmul(ctx.ffn_w3x[i_layer], ctx.ffn_norm[i_layer], w.ffn_w3[i_layer]);
 #endif
@@ -183,9 +198,9 @@ void Decode(int tok, // new token
 
     // 6. w2 . SiLU(w1x)*w3x
 #ifndef USE_CPU_ONLY
-    MatmulFPGA(ctx.ffn_out[i_layer], ctx.ffn_dot[i_layer], w.ffn_w2[i_layer], q,
-               kernel_matmul, ptr_a, ptr_b, ptr_result, buffer_a, buffer_b,
-               buffer_result);
+    MatmulFPGA(ctx.ffn_out[i_layer], ctx.ffn_dot[i_layer], w.ffn_w2[i_layer], q1,
+               kernel_matmul_1, ptr_a_1, ptr_b_1, ptr_result_1, buffer_a_1, buffer_b_1,
+               buffer_result_1);
 #else
     Matmul(ctx.ffn_out[i_layer], ctx.ffn_dot[i_layer], w.ffn_w2[i_layer]);
 #endif

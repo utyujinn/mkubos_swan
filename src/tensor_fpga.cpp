@@ -176,6 +176,59 @@ void MatmulFPGA(Tensor1d& out, const Tensor1dFFNB& in, const Tensor2dFFNB& w,
   }
 }
 
+// Matmul parallel 3
+// Compute the matrix multiplication of two input tensors.
+// Tensor1d [dim] . Tensor2dFFNB [dim, ffn_dim] = Tensor1dFFNB [ffn_dim]
+// out[i] = w[i,j] . in[j]
+// Compute the matrix multiplication of two input tensors.
+// Tensor1d [dim] . Tensor2dAttn [dim, dim] = Tensor1d [dim]
+// out[i] = w[i,j] . in[j]
+void MatmulParaFPGA(Tensor1d& out1, const Tensor1d& in1, const Tensor2dAttn& w1,
+				Tensor1d& out2, /*const Tensor1d& in2,*/ const Tensor2dAttn& w2,
+				Tensor1d& out3, /*const Tensor1d& in3,*/ const Tensor2dAttn& w3,
+                cl::CommandQueue& q1, cl::Kernel kernel_matmul_1, float* ptr_a1, float* ptr_b1, float* ptr_result1, cl::Buffer buffer_a1, cl::Buffer buffer_b1, cl::Buffer buffer_result1,
+                cl::CommandQueue& q2, cl::Kernel kernel_matmul_2, float* ptr_a2, float* ptr_b2, float* ptr_result2, cl::Buffer buffer_a2, cl::Buffer buffer_b2, cl::Buffer buffer_result2,
+                cl::CommandQueue& q3, cl::Kernel kernel_matmul_3, float* ptr_a3, float* ptr_b3, float* ptr_result3, cl::Buffer buffer_a3, cl::Buffer buffer_b3, cl::Buffer buffer_result3
+                ) {
+  for (int i = 0; i < kDim; i++) {
+    ptr_a1[i] = in1[i];
+    ptr_a2[i] = in1[i];
+    ptr_a3[i] = in1[i];
+  }
+  for (int i = 0; i < kDim; i++) {
+    for (int j = 0; j < kDim; j++) {
+      ptr_b1[i * kDim + j] = w1[i][j];
+      ptr_b2[i * kDim + j] = w2[i][j];
+      ptr_b3[i * kDim + j] = w3[i][j];
+    }
+  }
+  q1.enqueueMigrateMemObjects({buffer_a1, buffer_b1}, 0);
+  q2.enqueueMigrateMemObjects({buffer_a2, buffer_b2}, 0);
+  q3.enqueueMigrateMemObjects({buffer_a3, buffer_b3}, 0);
+  kernel_matmul_1.setArg(3, kDim);
+  kernel_matmul_1.setArg(4, kDim);
+  kernel_matmul_2.setArg(3, kDim);
+  kernel_matmul_2.setArg(4, kDim);
+  kernel_matmul_3.setArg(3, kDim);
+  kernel_matmul_3.setArg(4, kDim);
+
+  cl::Event event1, event2, event3;
+  q1.enqueueTask(kernel_matmul_1, nullptr, &event1);
+  q2.enqueueTask(kernel_matmul_2, nullptr, &event2);
+  q3.enqueueTask(kernel_matmul_3, nullptr, &event3);
+  q1.enqueueMigrateMemObjects({buffer_result1}, CL_MIGRATE_MEM_OBJECT_HOST);
+  q2.enqueueMigrateMemObjects({buffer_result2}, CL_MIGRATE_MEM_OBJECT_HOST);
+  q3.enqueueMigrateMemObjects({buffer_result3}, CL_MIGRATE_MEM_OBJECT_HOST);
+  event1.wait();
+  event2.wait();
+  event3.wait();
+  for (int i = 0; i < kDim; i++) {
+    out1[i] = ptr_result1[i];
+    out2[i] = ptr_result2[i];
+    out3[i] = ptr_result3[i];
+  }
+}
+
 /* ---------------------------------  /
       Normalization Operations
 /  --------------------------------- */

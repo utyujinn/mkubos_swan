@@ -45,6 +45,13 @@ void MatmulFPGA(Tensor1d& out, const Tensor1dFFNB& in, const Tensor2dFFNB& w,
                 float* ptr_b, float* ptr_result, cl::Buffer buffer_a,
                 cl::Buffer buffer_b, cl::Buffer buffer_result);
 
+void MatmulParaFPGA(Tensor1d& out1, const Tensor1d& in1, const Tensor2dAttn& w1,
+				Tensor1d& out2, /*const Tensor1d& in2,*/ const Tensor2dAttn& w2,
+				Tensor1d& out3, /*const Tensor1d& in3,*/ const Tensor2dAttn& w3,
+                cl::CommandQueue& q1, cl::Kernel kernel_matmul_1, float* ptr_a1, float* ptr_b1, float* ptr_result1, cl::Buffer buffer_a1, cl::Buffer buffer_b1, cl::Buffer buffer_result1,
+                cl::CommandQueue& q2, cl::Kernel kernel_matmul_2, float* ptr_a2, float* ptr_b2, float* ptr_result2, cl::Buffer buffer_a2, cl::Buffer buffer_b2, cl::Buffer buffer_result2,
+                cl::CommandQueue& q3, cl::Kernel kernel_matmul_3, float* ptr_a3, float* ptr_b3, float* ptr_result3, cl::Buffer buffer_a3, cl::Buffer buffer_b3, cl::Buffer buffer_result3);
+
 void RMSNormFPGA(Tensor1d& out, const Tensor1d& in, const Tensor1d& w,
                  cl::CommandQueue q, cl::Kernel kernel_rmsnorm, float* ptr_a,
                  float* ptr_b, float* ptr_result, cl::Buffer buffer_a,
