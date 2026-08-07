@@ -178,8 +178,9 @@ void Decode(int tok, // new token
     MatmulFFNw2FPGA(ctx.ffn_out[i_layer], ctx.ffn_dot[i_layer],
                     wfpga.ffn_w2_c0[i_layer], wfpga.ffn_w2_c1[i_layer],
                     wfpga.ffn_w2_c2[i_layer],
-                    q, kernel_matmul_pt_288x, ptr_a, ptr_result,
-                    buffer_a, buffer_result);
+                    q, kernel_matmul_pt_288x,
+                    wfpga.w2_in, wfpga.w2_in_ptr,
+                    wfpga.w2_result, wfpga.w2_result_ptr);
 #else
     Matmul(ctx.ffn_out[i_layer], ctx.ffn_dot[i_layer], w.ffn_w2[i_layer]);
 #endif

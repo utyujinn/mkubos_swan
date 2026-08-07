@@ -16,6 +16,7 @@ static double g_prof_h2d_ns    = 0;
 static double g_prof_kernel_ns = 0;
 static double g_prof_d2h_ns    = 0;
 static double g_prof_unpack_ns = 0;
+static double g_prof_wait_ns   = 0;  // final q.finish() of batched launches
 static long long g_prof_calls_288 = 0;
 static long long g_prof_calls_768 = 0;
 static long long g_prof_calls_w2 = 0;
@@ -28,7 +29,7 @@ static inline double ns_since(const std::chrono::high_resolution_clock::time_poi
 
 void PrintMatmulProfile() {
   double total = g_prof_pack_ns + g_prof_h2d_ns + g_prof_kernel_ns
-               + g_prof_d2h_ns + g_prof_unpack_ns;
+               + g_prof_d2h_ns + g_prof_unpack_ns + g_prof_wait_ns;
   long long calls = g_prof_calls_288 + g_prof_calls_768;
   if (calls == 0 || total <= 0) return;
   auto pct = [&](double x){ return 100.0 * x / total; };
@@ -38,12 +39,14 @@ void PrintMatmulProfile() {
          g_prof_calls_288, g_prof_calls_768,
          g_prof_calls_w2, g_prof_calls_vocab);
   printf("  pack   : %8.2f ms (%5.2f%%)\n", ms(g_prof_pack_ns),   pct(g_prof_pack_ns));
-  printf("  h2d    : %8.2f ms (%5.2f%%)  <- enqueueMigrate H->D + finish\n",
+  printf("  h2d    : %8.2f ms (%5.2f%%)  <- enqueueMigrate H->D (enqueue)\n",
          ms(g_prof_h2d_ns),    pct(g_prof_h2d_ns));
-  printf("  kernel : %8.2f ms (%5.2f%%)  <- enqueueTask + finish\n",
+  printf("  kernel : %8.2f ms (%5.2f%%)  <- enqueueTask (enqueue)\n",
          ms(g_prof_kernel_ns), pct(g_prof_kernel_ns));
-  printf("  d2h    : %8.2f ms (%5.2f%%)  <- enqueueMigrate D->H + finish\n",
+  printf("  d2h    : %8.2f ms (%5.2f%%)  <- enqueueMigrate D->H (enqueue)\n",
          ms(g_prof_d2h_ns),    pct(g_prof_d2h_ns));
+  printf("  wait   : %8.2f ms (%5.2f%%)  <- final q.finish of batched launches\n",
+         ms(g_prof_wait_ns),   pct(g_prof_wait_ns));
   printf("  unpack : %8.2f ms (%5.2f%%)\n", ms(g_prof_unpack_ns), pct(g_prof_unpack_ns));
   printf("  TOTAL  : %8.2f ms  (avg %.3f ms / call)\n", ms(total), ms(total)/calls);
 }
@@ -353,6 +356,33 @@ void UploadWeightsFPGA(WeightsFPGA& out, const Weights& w,
                      + WeightsFPGA::kVocabChunks * sz_vocab_chunk;
   printf("UploadWeightsFPGA: %zu buffers, %.2f MB total\n",
          all.size(), total_bytes / (1024.0 * 1024.0));
+
+  // Create + map async staging buffers for multi-launch ops (w2: 3 slices +
+  // 3 partial results, vocab: 42 per-chunk results). Mapped once here; the
+  // accelerator and host share the buffers across the whole run.
+  for (int c = 0; c < 3; c++) {
+    cl_int err;
+    out.w2_in[c] = cl::Buffer(context, CL_MEM_READ_ONLY, kDim * sizeof(float),
+                              nullptr, &err);
+    out.w2_in_ptr[c] = (float*)q.enqueueMapBuffer(
+        out.w2_in[c], CL_TRUE, CL_MAP_WRITE, 0, kDim * sizeof(float),
+        nullptr, nullptr, &err);
+    out.w2_result[c] = cl::Buffer(context, CL_MEM_WRITE_ONLY, kDim * sizeof(float),
+                                  nullptr, &err);
+    out.w2_result_ptr[c] = (float*)q.enqueueMapBuffer(
+        out.w2_result[c], CL_TRUE, CL_MAP_READ, 0, kDim * sizeof(float),
+        nullptr, nullptr, &err);
+  }
+  for (int c = 0; c < WeightsFPGA::kVocabChunks; c++) {
+    cl_int err;
+    out.vocab_result[c] = cl::Buffer(context, CL_MEM_WRITE_ONLY,
+                                     WeightsFPGA::kVocabChunkRows * sizeof(float),
+                                     nullptr, &err);
+    out.vocab_result_ptr[c] = (float*)q.enqueueMapBuffer(
+        out.vocab_result[c], CL_TRUE, CL_MAP_READ, 0,
+        WeightsFPGA::kVocabChunkRows * sizeof(float), nullptr, nullptr, &err);
+  }
+  q.finish();
 }
 
 // Compute the matrix multiplication of two input tensors.
@@ -376,6 +406,7 @@ void MatmulPt288x288(Tensor1d& out, const Tensor1d& in,
   g_prof_h2d_ns += ns_since(t0);
 
   kernel_matmul_pt_288x.setArg(1, buffer_w);
+  kernel_matmul_pt_288x.setArg(2, buffer_result);
   kernel_matmul_pt_288x.setArg(3, kDim);
   t0 = std::chrono::high_resolution_clock::now();
   q.enqueueTask(kernel_matmul_pt_288x);
@@ -415,6 +446,7 @@ void MatmulPt288x768(Tensor1dFFNB& out, const Tensor1d& in,
   g_prof_h2d_ns += ns_since(t0);
 
   kernel_matmul_pt_288x.setArg(1, buffer_w);
+  kernel_matmul_pt_288x.setArg(2, buffer_result);
   kernel_matmul_pt_288x.setArg(3, kFFNDim);
   t0 = std::chrono::high_resolution_clock::now();
   q.enqueueTask(kernel_matmul_pt_288x);
@@ -438,12 +470,15 @@ void MatmulPt288x768(Tensor1dFFNB& out, const Tensor1d& in,
 // out[288] = w2[288][768] . in[768]
 //         = sum_c w2[:, c*288..(c+1)*288-1] . in[c*288..(c+1)*288-1]  (c=0..2)
 // 3 kernel launches, each producing a partial [288] which we sum on host.
+// The 3 launches are enqueued back-to-back (no intermediate q.finish) into
+// pre-mapped staging buffers, then drained by a single q.finish. This removes
+// two host-side round-trips per call.
 void MatmulFFNw2FPGA(Tensor1d& out, const Tensor1dFFNB& in,
                      cl::Buffer buffer_w_c0, cl::Buffer buffer_w_c1,
                      cl::Buffer buffer_w_c2,
                      cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x,
-                     float* ptr_a, float* ptr_result,
-                     cl::Buffer buffer_a, cl::Buffer buffer_result) {
+                     const cl::Buffer* buffer_a, float* const* ptr_a,
+                     const cl::Buffer* buffer_result, float* const* ptr_result) {
   cl::Buffer* chunks[3] = {&buffer_w_c0, &buffer_w_c1, &buffer_w_c2};
   float acc[kDim];
   for (int i = 0; i < kDim; i++) acc[i] = 0.0f;
@@ -452,49 +487,55 @@ void MatmulFFNw2FPGA(Tensor1d& out, const Tensor1dFFNB& in,
     auto t0 = std::chrono::high_resolution_clock::now();
     // Slice c of input: in[c*kDim .. min((c+1)*kDim, kFFNDim)-1],
     // zero-padded to kDim (chunk 2 has only 192 valid columns).
+    // Each chunk has its own input buffer so the host can write the next
+    // slice while the accelerator still reads the previous one.
     int col_begin = c * kDim;
     for (int i = 0; i < kDim; i++) {
       int idx = col_begin + i;
-      ptr_a[i] = (idx < kFFNDim) ? in[idx] : 0.0f;
+      ptr_a[c][i] = (idx < kFFNDim) ? in[idx] : 0.0f;
     }
     g_prof_pack_ns += ns_since(t0);
 
     t0 = std::chrono::high_resolution_clock::now();
-    q.enqueueMigrateMemObjects({buffer_a}, 0);
-    q.finish();
+    q.enqueueMigrateMemObjects({buffer_a[c]}, 0);
     g_prof_h2d_ns += ns_since(t0);
 
     kernel_matmul_pt_288x.setArg(1, *chunks[c]);
+    kernel_matmul_pt_288x.setArg(2, buffer_result[c]);
     kernel_matmul_pt_288x.setArg(3, kDim);
     t0 = std::chrono::high_resolution_clock::now();
     q.enqueueTask(kernel_matmul_pt_288x);
-    q.finish();
     g_prof_kernel_ns += ns_since(t0);
 
     t0 = std::chrono::high_resolution_clock::now();
-    q.enqueueMigrateMemObjects({buffer_result}, CL_MIGRATE_MEM_OBJECT_HOST);
-    q.finish();
+    q.enqueueMigrateMemObjects({buffer_result[c]}, CL_MIGRATE_MEM_OBJECT_HOST);
     g_prof_d2h_ns += ns_since(t0);
-
-    t0 = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < kDim; i++) {
-      acc[i] += ptr_result[i];
-    }
-    g_prof_unpack_ns += ns_since(t0);
   }
 
+  auto t_wait = std::chrono::high_resolution_clock::now();
+  q.finish();
+  g_prof_wait_ns += ns_since(t_wait);
+
+  t_wait = std::chrono::high_resolution_clock::now();
+  for (int c = 0; c < 3; c++) {
+    for (int i = 0; i < kDim; i++) {
+      acc[i] += ptr_result[c][i];
+    }
+  }
   for (int i = 0; i < kDim; i++) out[i] = acc[i];
+  g_prof_unpack_ns += ns_since(t_wait);
   g_prof_calls_w2++;
 }
 
 // Final vocab projection via row chunking.
 // out[32000] = tok_emb[32000][288] . in[288]
-// Split output rows into 42 chunks of 768. Input sent once, kernel runs 42 times.
+// Split output rows into 42 chunks of 768. Input sent once; the 42 launches
+// are enqueued back-to-back into per-chunk result buffers and drained with a
+// single q.finish (one host round-trip instead of 42).
 void MutmulVocabFPGA(Tensor1dLogits& out, const Tensor1d& in,
                      const WeightsFPGA& wfpga,
                      cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x,
-                     float* ptr_a, float* ptr_result,
-                     cl::Buffer buffer_a, cl::Buffer buffer_result) {
+                     float* ptr_a, cl::Buffer buffer_a) {
   // Input vector: send once.
   auto t0 = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < kDim; i++) {
@@ -504,7 +545,6 @@ void MutmulVocabFPGA(Tensor1dLogits& out, const Tensor1d& in,
 
   t0 = std::chrono::high_resolution_clock::now();
   q.enqueueMigrateMemObjects({buffer_a}, 0);
-  q.finish();
   g_prof_h2d_ns += ns_since(t0);
 
   const int kChunks    = WeightsFPGA::kVocabChunks;
@@ -512,27 +552,33 @@ void MutmulVocabFPGA(Tensor1dLogits& out, const Tensor1d& in,
 
   for (int c = 0; c < kChunks; c++) {
     kernel_matmul_pt_288x.setArg(1, wfpga.tok_emb[c]);
+    kernel_matmul_pt_288x.setArg(2, wfpga.vocab_result[c]);
     kernel_matmul_pt_288x.setArg(3, kChunkRows);
 
     t0 = std::chrono::high_resolution_clock::now();
     q.enqueueTask(kernel_matmul_pt_288x);
-    q.finish();
     g_prof_kernel_ns += ns_since(t0);
 
     t0 = std::chrono::high_resolution_clock::now();
-    q.enqueueMigrateMemObjects({buffer_result}, CL_MIGRATE_MEM_OBJECT_HOST);
-    q.finish();
+    q.enqueueMigrateMemObjects({wfpga.vocab_result[c]},
+                               CL_MIGRATE_MEM_OBJECT_HOST);
     g_prof_d2h_ns += ns_since(t0);
-
-    t0 = std::chrono::high_resolution_clock::now();
-    int start = c * kChunkRows;
-    int end   = start + kChunkRows;
-    if (end > kVocabSize) end = kVocabSize;
-    for (int r = 0; r < end - start; r++) {
-      out[start + r] = ptr_result[r];
-    }
-    g_prof_unpack_ns += ns_since(t0);
   }
+
+  t0 = std::chrono::high_resolution_clock::now();
+  q.finish();
+  g_prof_wait_ns += ns_since(t0);
+
+  t0 = std::chrono::high_resolution_clock::now();
+  for (int c = 0; c < kChunks; c++) {
+    int start = c * kChunkRows;
+    int end   = std::min(start + kChunkRows, kVocabSize);
+    const float* presult = wfpga.vocab_result_ptr[c];
+    for (int r = 0; r < end - start; r++) {
+      out[start + r] = presult[r];
+    }
+  }
+  g_prof_unpack_ns += ns_since(t0);
 
   g_prof_calls_vocab++;
 }

@@ -463,7 +463,7 @@ int main(int argc, char* argv[]) {
 #ifndef USE_CPU_ONLY
     swan::MutmulVocabFPGA(ctx_logits, ctx_final_norm, wfpga,
                           q, kernel_matmul_pt_288x,
-                          ptr_a, ptr_result, buffer_a, buffer_result);
+                          ptr_a, buffer_a);
 #else
     swan::MutmulVocab(ctx_logits, ctx_final_norm, tok_emb_table);
 #endif

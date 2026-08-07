@@ -38,6 +38,20 @@ struct WeightsFPGA {
   static constexpr int kVocabChunks    = 42;
   static constexpr int kVocabChunkRows = 768;
   cl::Buffer tok_emb[kVocabChunks];  // each 768x288
+
+  // Async staging buffers for multi-launch ops. Created and mapped once at
+  // startup by UploadWeightsFPGA. Each launch writes to its own cl::Buffer so
+  // all launches can be enqueued back-to-back and drained with a single
+  // q.finish(), instead of one host-side round-trip per launch (the per-launch
+  // sync was ~1ms and dominated runtime: 96 launches/token).
+  //   - FFN w2 chunked matmul: 3 input slices + 3 partial results
+  //   - vocab projection:      42 per-chunk results (full 768 rows each)
+  cl::Buffer w2_in[3];
+  cl::Buffer w2_result[3];
+  cl::Buffer vocab_result[kVocabChunks];
+  float* w2_in_ptr[3] = {};
+  float* w2_result_ptr[3] = {};
+  float* vocab_result_ptr[kVocabChunks] = {};
 };
 
 void UploadWeightsFPGA(WeightsFPGA& out, const Weights& w,
@@ -45,19 +59,24 @@ void UploadWeightsFPGA(WeightsFPGA& out, const Weights& w,
                        cl::Context context, cl::CommandQueue q);
 
 // FFN w2 on FPGA via column chunking (3 kernel calls + host sum).
+// Input slices and per-chunk results use the pre-mapped staging buffers in
+// wfpga (w2_in/w2_in_ptr, w2_result/w2_result_ptr) so the 3 launches are
+// enqueued without intermediate host syncs and drained by one q.finish().
 void MatmulFFNw2FPGA(Tensor1d& out, const Tensor1dFFNB& in,
                      cl::Buffer buffer_w_c0, cl::Buffer buffer_w_c1,
                      cl::Buffer buffer_w_c2,
                      cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x,
-                     float* ptr_a, float* ptr_result,
-                     cl::Buffer buffer_a, cl::Buffer buffer_result);
+                     const cl::Buffer* buffer_a, float* const* ptr_a,
+                     const cl::Buffer* buffer_result, float* const* ptr_result);
 
 // Final vocab projection on FPGA via row chunking (42 kernel calls).
+// All 42 launches are enqueued back-to-back into wfpga.vocab_result and
+// drained with a single q.finish(); results are read from
+// wfpga.vocab_result_ptr.
 void MutmulVocabFPGA(Tensor1dLogits& out, const Tensor1d& in,
                      const WeightsFPGA& wfpga,
                      cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x,
-                     float* ptr_a, float* ptr_result,
-                     cl::Buffer buffer_a, cl::Buffer buffer_result);
+                     float* ptr_a, cl::Buffer buffer_a);
 
 void AddFPGA(Tensor1d& out, const Tensor1d& in, float a, cl::CommandQueue q,
              cl::Kernel kernel_add, float* ptr_a, float* ptr_b,
