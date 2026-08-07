@@ -4,6 +4,8 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstring>
+#include <vector>
 
 namespace swan {
 
@@ -267,29 +269,60 @@ void MatmulParaFPGA(Tensor1d& out1, const Tensor1d& in1, const Tensor2dAttn& w1,
   }
 }
 
+// Upload all weight matrices to FPGA memory once at startup.
+// After this, per-call MatmulPt288x* only needs to send the input vector.
+void UploadWeightsFPGA(WeightsFPGA& out, const Weights& w,
+                       cl::Context context, cl::CommandQueue q) {
+  const size_t sz_attn = sizeof(Tensor2dAttn);  // 288*288*4 = ~324 KB
+  const size_t sz_ffn  = sizeof(Tensor2dFFNA);  // 768*288*4 = ~864 KB
+
+  auto upload_one = [&](cl::Buffer& dst, const void* src, size_t bytes) {
+    cl_int err;
+    dst = cl::Buffer(context, CL_MEM_READ_ONLY, bytes, nullptr, &err);
+    void* p = q.enqueueMapBuffer(dst, CL_TRUE, CL_MAP_WRITE, 0, bytes,
+                                 nullptr, nullptr, &err);
+    std::memcpy(p, src, bytes);
+    q.enqueueUnmapMemObject(dst, p);
+  };
+
+  std::vector<cl::Memory> all;
+  for (int L = 0; L < kNumLayers; L++) {
+    upload_one(out.attn_wq[L], w.attn_wq[L], sz_attn);
+    upload_one(out.attn_wk[L], w.attn_wk[L], sz_attn);
+    upload_one(out.attn_wv[L], w.attn_wv[L], sz_attn);
+    upload_one(out.attn_wo[L], w.attn_wo[L], sz_attn);
+    upload_one(out.ffn_w1[L],  w.ffn_w1[L],  sz_ffn);
+    upload_one(out.ffn_w3[L],  w.ffn_w3[L],  sz_ffn);
+    all.push_back(out.attn_wq[L]);
+    all.push_back(out.attn_wk[L]);
+    all.push_back(out.attn_wv[L]);
+    all.push_back(out.attn_wo[L]);
+    all.push_back(out.ffn_w1[L]);
+    all.push_back(out.ffn_w3[L]);
+  }
+  q.enqueueMigrateMemObjects(all, 0);
+  q.finish();
+  printf("UploadWeightsFPGA: %zu buffers, %.2f MB total\n",
+         all.size(),
+         (kNumLayers * (4 * sz_attn + 2 * sz_ffn)) / (1024.0 * 1024.0));
+}
+
 // Compute the matrix multiplication of two input tensors.
 // Tensor1d [dim] . Tensor2dAttn [dim, dim] = Tensor1d [dim]
 // out[i] = w[i,j] . in[j]
-void MatmulPt288x288(Tensor1d& out, const Tensor1d& in, const Tensor2dAttn& w,
-                cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x, float* ptr_a,
-                float* ptr_b, float* ptr_result, cl::Buffer buffer_a,
-                cl::Buffer buffer_b, cl::Buffer buffer_result) {
+// Weight is resident in buffer_w (see UploadWeightsFPGA).
   auto t0 = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < kDim; i++) {
     ptr_a[i] = in[i];
   }
-  for (int i = 0; i < kDim; i++) {
-    for (int j = 0; j < kDim; j++) {
-      ptr_b[i * kDim + j] = w[i][j];
-    }
-  }
   g_prof_pack_ns += ns_since(t0);
 
   t0 = std::chrono::high_resolution_clock::now();
-  q.enqueueMigrateMemObjects({buffer_a, buffer_b}, 0);
+  q.enqueueMigrateMemObjects({buffer_a}, 0);
   q.finish();
   g_prof_h2d_ns += ns_since(t0);
 
+  kernel_matmul_pt_288x.setArg(1, buffer_w);
   kernel_matmul_pt_288x.setArg(3, kDim);
   t0 = std::chrono::high_resolution_clock::now();
   q.enqueueTask(kernel_matmul_pt_288x);
@@ -311,26 +344,24 @@ void MatmulPt288x288(Tensor1d& out, const Tensor1d& in, const Tensor2dAttn& w,
 // Compute the matrix multiplication of two input tensors.
 // Tensor1dFFNB [ffn_dim] . Tensor2dFFNA [ffn_dim, dim] = Tensor1dFFNB [ffn_dim]
 // out[i] = w[i,j] . in[j]
-void MatmulPt288x768(Tensor1dFFNB& out, const Tensor1d& in, const Tensor2dFFNA& w,
-                cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x, float* ptr_a,
-                float* ptr_b, float* ptr_result, cl::Buffer buffer_a,
-                cl::Buffer buffer_b, cl::Buffer buffer_result) {
+// Weight is resident in buffer_w (see UploadWeightsFPGA).
+void MatmulPt288x768(Tensor1dFFNB& out, const Tensor1d& in,
+                cl::Buffer buffer_w,
+                cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x,
+                float* ptr_a, float* ptr_result,
+                cl::Buffer buffer_a, cl::Buffer buffer_result) {
   auto t0 = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < kDim; i++) {
     ptr_a[i] = in[i];
   }
-  for (int i = 0; i < kFFNDim; i++) {
-    for (int j = 0; j < kDim; j++) {
-      ptr_b[i * kDim + j] = w[i][j];
-    }
-  }
   g_prof_pack_ns += ns_since(t0);
 
   t0 = std::chrono::high_resolution_clock::now();
-  q.enqueueMigrateMemObjects({buffer_a, buffer_b}, 0);
+  q.enqueueMigrateMemObjects({buffer_a}, 0);
   q.finish();
   g_prof_h2d_ns += ns_since(t0);
 
+  kernel_matmul_pt_288x.setArg(1, buffer_w);
   kernel_matmul_pt_288x.setArg(3, kFFNDim);
   t0 = std::chrono::high_resolution_clock::now();
   q.enqueueTask(kernel_matmul_pt_288x);

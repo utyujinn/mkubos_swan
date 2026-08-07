@@ -17,10 +17,11 @@ void Decode(int tok, int pos, const Tensor1d& ctx_input,
             Tensor1d& ctx_final_norm, const Weights& w
 #ifndef USE_CPU_ONLY
             ,
+            const WeightsFPGA& wfpga,
             cl::CommandQueue q,
             cl::Kernel kernel_matmul_pt_288x,
-            float* ptr_a, float* ptr_b, float* ptr_result,
-            cl::Buffer buffer_a, cl::Buffer buffer_b, cl::Buffer buffer_result
+            float* ptr_a, float* ptr_result,
+            cl::Buffer buffer_a, cl::Buffer buffer_result
 #endif // USE_CPU_ONLY
 );
 

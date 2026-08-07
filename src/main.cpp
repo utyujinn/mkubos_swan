@@ -272,9 +272,11 @@ int main(int argc, char* argv[]) {
   // can be used to reference the memory locations on the device.
   OCL_CHECK(err, cl::Buffer buffer_a(context, CL_MEM_READ_ONLY, size_in_bytes,
                                      NULL, &err));
-  OCL_CHECK(err,
-            cl::Buffer buffer_b(context, CL_MEM_READ_ONLY,
-                                size_in_bytes * size_in_bytes, NULL, &err));
+  // buffer_b (weight staging area) removed: weights now resident in
+  // FPGA memory via UploadWeightsFPGA + WeightsFPGA.
+  // OCL_CHECK(err,
+  //           cl::Buffer buffer_b(context, CL_MEM_READ_ONLY,
+  //                               size_in_bytes * size_in_bytes, NULL, &err));
   // OCL_CHECK(err, cl::Buffer buffer_c(context, CL_MEM_READ_ONLY, size_in_bytes,
   //                                    NULL, &err));
   // OCL_CHECK(err, cl::Buffer buffer_d(context, CL_MEM_READ_ONLY, size_in_bytes,
@@ -351,13 +353,13 @@ int main(int argc, char* argv[]) {
   // OCL_CHECK(err, err = kernel_rope.setArg(6, 1));
 
   OCL_CHECK(err, err = kernel_matmul_pt_288x.setArg(0, buffer_a));
-  OCL_CHECK(err, err = kernel_matmul_pt_288x.setArg(1, buffer_b));
+  // arg(1) (weight buffer) is set per-call in MatmulPt288x*.
   OCL_CHECK(err, err = kernel_matmul_pt_288x.setArg(2, buffer_result));
   OCL_CHECK(err, err = kernel_matmul_pt_288x.setArg(3, swan::kDim));
 
   // We then need to map our OpenCL buffer5 to get the pointers
   float* ptr_a;
-  float* ptr_b;
+  // float* ptr_b;  // removed: weight staging no longer needed
   // float* ptr_c;
   // float* ptr_d;
   float* ptr_result;
@@ -374,9 +376,10 @@ int main(int argc, char* argv[]) {
   OCL_CHECK(err, ptr_a = (float*)q.enqueueMapBuffer(
                      buffer_a, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
                      NULL, &err));
-  OCL_CHECK(err, ptr_b = (float*)q.enqueueMapBuffer(
-                     buffer_b, CL_TRUE, CL_MAP_WRITE, 0,
-                     size_in_bytes * size_in_bytes, NULL, NULL, &err));
+  // ptr_b map removed
+  // OCL_CHECK(err, ptr_b = (float*)q.enqueueMapBuffer(
+  //                    buffer_b, CL_TRUE, CL_MAP_WRITE, 0,
+  //                    size_in_bytes * size_in_bytes, NULL, NULL, &err));
   // OCL_CHECK(err, ptr_c = (float*)q.enqueueMapBuffer(
   //                    buffer_c, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
   //                    NULL, &err));
@@ -419,6 +422,10 @@ int main(int argc, char* argv[]) {
   // OCL_CHECK(err, ptr_result_3 = (float*)q3.enqueueMapBuffer(
   //                    buffer_result_3, CL_TRUE, CL_MAP_READ, 0, size_in_bytes,
   //                    NULL, NULL, &err));
+
+  // Weight residency: upload all layer weights to FPGA memory once.
+  static swan::WeightsFPGA wfpga;
+  swan::UploadWeightsFPGA(wfpga, weights, context, q);
 #endif // USE_CPU_ONLY
 
   // 6. Decode
@@ -443,10 +450,11 @@ int main(int argc, char* argv[]) {
                  ctx_final_norm, weights
 #ifndef USE_CPU_ONLY
                  ,
+                 wfpga,
                  q,
                  kernel_matmul_pt_288x,
-                 ptr_a, ptr_b, ptr_result,
-                 buffer_a, buffer_b, buffer_result
+                 ptr_a, ptr_result,
+                 buffer_a, buffer_result
 #endif // USE_CPU_ONLY
     );
 
@@ -497,7 +505,7 @@ int main(int argc, char* argv[]) {
 #ifndef USE_CPU_ONLY
   // 8. Flush OpenCL Device Memory
   OCL_CHECK(err, err = q.enqueueUnmapMemObject(buffer_a, ptr_a));
-  OCL_CHECK(err, err = q.enqueueUnmapMemObject(buffer_b, ptr_b));
+  // OCL_CHECK(err, err = q.enqueueUnmapMemObject(buffer_b, ptr_b));  // removed
   OCL_CHECK(err, err = q.enqueueUnmapMemObject(buffer_result, ptr_result));
   OCL_CHECK(err, err = q.finish());
 

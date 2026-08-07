@@ -11,8 +11,24 @@
 #include <CL/cl2.hpp>
 
 #include "tensor.hpp"
+#include "weight.hpp"
 
 namespace swan {
+
+// ---- Weight residency ----
+// Per-layer cl::Buffer holding attention/FFN weight matrices resident in
+// FPGA memory. Populated once at startup by UploadWeightsFPGA().
+struct WeightsFPGA {
+  cl::Buffer attn_wq[kNumLayers];   // 288x288
+  cl::Buffer attn_wk[kNumLayers];   // 288x288
+  cl::Buffer attn_wv[kNumLayers];   // 288x288
+  cl::Buffer attn_wo[kNumLayers];   // 288x288
+  cl::Buffer ffn_w1[kNumLayers];    // 768x288
+  cl::Buffer ffn_w3[kNumLayers];    // 768x288
+};
+
+void UploadWeightsFPGA(WeightsFPGA& out, const Weights& w,
+                       cl::Context context, cl::CommandQueue q);
 
 void AddFPGA(Tensor1d& out, const Tensor1d& in, float a, cl::CommandQueue q,
              cl::Kernel kernel_add, float* ptr_a, float* ptr_b,
@@ -55,15 +71,18 @@ void MatmulParaFPGA(Tensor1d& out1, const Tensor1d& in1, const Tensor2dAttn& w1,
 // Profiling
 void PrintMatmulProfile();
 
-// Added
-void MatmulPt288x288(Tensor1d& out, const Tensor1d& in, const Tensor2dAttn& w,
-                cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x, float* ptr_a,
-                float* ptr_b, float* ptr_result, cl::Buffer buffer_a,
-                cl::Buffer buffer_b, cl::Buffer buffer_result);
-void MatmulPt288x768(Tensor1dFFNB& out, const Tensor1d& in, const Tensor2dFFNA& w,
-                cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x, float* ptr_a,
-                float* ptr_b, float* ptr_result, cl::Buffer buffer_a,
-                cl::Buffer buffer_b, cl::Buffer buffer_result);
+// Added: weight-resident variants. Weight is already in FPGA memory
+// (see UploadWeightsFPGA); only the input vector is sent each call.
+void MatmulPt288x288(Tensor1d& out, const Tensor1d& in,
+                cl::Buffer buffer_w,
+                cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x,
+                float* ptr_a, float* ptr_result,
+                cl::Buffer buffer_a, cl::Buffer buffer_result);
+void MatmulPt288x768(Tensor1dFFNB& out, const Tensor1d& in,
+                cl::Buffer buffer_w,
+                cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x,
+                float* ptr_a, float* ptr_result,
+                cl::Buffer buffer_a, cl::Buffer buffer_result);
 
 void RMSNormFPGA(Tensor1d& out, const Tensor1d& in, const Tensor1d& w,
                  cl::CommandQueue q, cl::Kernel kernel_rmsnorm, float* ptr_a,

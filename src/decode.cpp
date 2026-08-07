@@ -14,10 +14,11 @@ void Decode(int tok, // new token
             const Weights& w
 #ifndef USE_CPU_ONLY
             ,
+            const WeightsFPGA& wfpga,
             cl::CommandQueue q,
             cl::Kernel kernel_matmul_pt_288x,
-            float* ptr_a, float* ptr_b, float* ptr_result,
-            cl::Buffer buffer_a, cl::Buffer buffer_b, cl::Buffer buffer_result
+            float* ptr_a, float* ptr_result,
+            cl::Buffer buffer_a, cl::Buffer buffer_result
 #endif // USE_CPU_ONLY
 ) {
 
@@ -52,14 +53,17 @@ void Decode(int tok, // new token
     // 2. Weight Multiple
 #ifndef USE_CPU_ONLY
     MatmulPt288x288(ctx.attn_wqx[i_layer], ctx.attn_norm[i_layer],
-               w.attn_wq[i_layer], q, kernel_matmul_pt_288x, ptr_a, ptr_b, ptr_result,
-               buffer_a, buffer_b, buffer_result);
+               wfpga.attn_wq[i_layer],
+               q, kernel_matmul_pt_288x, ptr_a, ptr_result,
+               buffer_a, buffer_result);
     MatmulPt288x288(ctx.attn_wkx[i_layer], ctx.attn_norm[i_layer],
-               w.attn_wk[i_layer], q, kernel_matmul_pt_288x, ptr_a, ptr_b, ptr_result,
-               buffer_a, buffer_b, buffer_result);
+               wfpga.attn_wk[i_layer],
+               q, kernel_matmul_pt_288x, ptr_a, ptr_result,
+               buffer_a, buffer_result);
     MatmulPt288x288(ctx.attn_wvx[i_layer], ctx.attn_norm[i_layer],
-               w.attn_wv[i_layer], q, kernel_matmul_pt_288x, ptr_a, ptr_b, ptr_result,
-               buffer_a, buffer_b, buffer_result);
+               wfpga.attn_wv[i_layer],
+               q, kernel_matmul_pt_288x, ptr_a, ptr_result,
+               buffer_a, buffer_result);
 #else
     Matmul(ctx.attn_wqx[i_layer], ctx.attn_norm[i_layer], w.attn_wq[i_layer]);
     Matmul(ctx.attn_wkx[i_layer], ctx.attn_norm[i_layer], w.attn_wk[i_layer]);
@@ -115,9 +119,10 @@ void Decode(int tok, // new token
 
     // 6. Output (Merge Heads)
 #ifndef USE_CPU_ONLY
-    MatmulPt288x288(ctx.attn_out[i_layer], ctx.attn_val[i_layer], w.attn_wo[i_layer],
-               q, kernel_matmul_pt_288x, ptr_a, ptr_b, ptr_result, buffer_a, buffer_b,
-               buffer_result);
+    MatmulPt288x288(ctx.attn_out[i_layer], ctx.attn_val[i_layer],
+               wfpga.attn_wo[i_layer],
+               q, kernel_matmul_pt_288x, ptr_a, ptr_result,
+               buffer_a, buffer_result);
 #else
     Matmul(ctx.attn_out[i_layer], ctx.attn_val[i_layer], w.attn_wo[i_layer]);
 #endif
@@ -140,18 +145,20 @@ void Decode(int tok, // new token
 
     // 2. w1 . x
 #ifndef USE_CPU_ONLY
-    MatmulPt288x768(ctx.ffn_w1x[i_layer], ctx.ffn_norm[i_layer], w.ffn_w1[i_layer],
-               q, kernel_matmul_pt_288x, ptr_a, ptr_b, ptr_result, buffer_a, buffer_b,
-               buffer_result);
+    MatmulPt288x768(ctx.ffn_w1x[i_layer], ctx.ffn_norm[i_layer],
+               wfpga.ffn_w1[i_layer],
+               q, kernel_matmul_pt_288x, ptr_a, ptr_result,
+               buffer_a, buffer_result);
 #else
     Matmul(ctx.ffn_w1x[i_layer], ctx.ffn_norm[i_layer], w.ffn_w1[i_layer]);
 #endif
 
     // 3. w3 . x
 #ifndef USE_CPU_ONLY
-    MatmulPt288x768(ctx.ffn_w3x[i_layer], ctx.ffn_norm[i_layer], w.ffn_w3[i_layer],
-               q, kernel_matmul_pt_288x, ptr_a, ptr_b, ptr_result, buffer_a, buffer_b,
-               buffer_result);
+    MatmulPt288x768(ctx.ffn_w3x[i_layer], ctx.ffn_norm[i_layer],
+               wfpga.ffn_w3[i_layer],
+               q, kernel_matmul_pt_288x, ptr_a, ptr_result,
+               buffer_a, buffer_result);
 #else
     Matmul(ctx.ffn_w3x[i_layer], ctx.ffn_norm[i_layer], w.ffn_w3[i_layer]);
 #endif
