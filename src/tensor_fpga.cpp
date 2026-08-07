@@ -311,6 +311,11 @@ void UploadWeightsFPGA(WeightsFPGA& out, const Weights& w,
 // Tensor1d [dim] . Tensor2dAttn [dim, dim] = Tensor1d [dim]
 // out[i] = w[i,j] . in[j]
 // Weight is resident in buffer_w (see UploadWeightsFPGA).
+void MatmulPt288x288(Tensor1d& out, const Tensor1d& in,
+                cl::Buffer buffer_w,
+                cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x,
+                float* ptr_a, float* ptr_result,
+                cl::Buffer buffer_a, cl::Buffer buffer_result) {
   auto t0 = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < kDim; i++) {
     ptr_a[i] = in[i];
