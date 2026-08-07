@@ -423,9 +423,10 @@ int main(int argc, char* argv[]) {
   //                    buffer_result_3, CL_TRUE, CL_MAP_READ, 0, size_in_bytes,
   //                    NULL, NULL, &err));
 
-  // Weight residency: upload all layer weights to FPGA memory once.
+  // Weight residency: upload all layer weights + FFN w2 chunks + vocab
+  // chunks to FPGA memory once.
   static swan::WeightsFPGA wfpga;
-  swan::UploadWeightsFPGA(wfpga, weights, context, q);
+  swan::UploadWeightsFPGA(wfpga, weights, tok_emb_table, context, q);
 #endif // USE_CPU_ONLY
 
   // 6. Decode
@@ -459,7 +460,13 @@ int main(int argc, char* argv[]) {
     );
 
     // 6-2. Calculate the logits and softmax.
+#ifndef USE_CPU_ONLY
+    swan::MutmulVocabFPGA(ctx_logits, ctx_final_norm, wfpga,
+                          q, kernel_matmul_pt_288x,
+                          ptr_a, ptr_result, buffer_a, buffer_result);
+#else
     swan::MutmulVocab(ctx_logits, ctx_final_norm, tok_emb_table);
+#endif
 
     if (args.print_softmax) {
       printf("\nSoftmax\n <- ");

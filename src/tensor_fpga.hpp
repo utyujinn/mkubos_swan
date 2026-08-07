@@ -25,10 +25,39 @@ struct WeightsFPGA {
   cl::Buffer attn_wo[kNumLayers];   // 288x288
   cl::Buffer ffn_w1[kNumLayers];    // 768x288
   cl::Buffer ffn_w3[kNumLayers];    // 768x288
+
+  // FFN w2 is [288 out][768 in]. Existing kernel needs COLSIZE=288 input,
+  // so split columns of w2 into 3 sub-matrices of [288 out][288 col].
+  cl::Buffer ffn_w2_c0[kNumLayers];  // w2[:, 0..287]
+  cl::Buffer ffn_w2_c1[kNumLayers];  // w2[:, 288..575]
+  cl::Buffer ffn_w2_c2[kNumLayers];  // w2[:, 576..767]
+
+  // tok_emb_table is [32000 out][288 in]. Existing kernel produces up to
+  // MAX_ROW_SIZE=768 outputs per call, so split into 42 row chunks of 768.
+  // Last chunk padded with zeros (32000 = 41*768 + 512, chunk 41 has 256 zero rows).
+  static constexpr int kVocabChunks    = 42;
+  static constexpr int kVocabChunkRows = 768;
+  cl::Buffer tok_emb[kVocabChunks];  // each 768x288
 };
 
 void UploadWeightsFPGA(WeightsFPGA& out, const Weights& w,
+                       const Tensor2dTok& tok_emb_table,
                        cl::Context context, cl::CommandQueue q);
+
+// FFN w2 on FPGA via column chunking (3 kernel calls + host sum).
+void MatmulFFNw2FPGA(Tensor1d& out, const Tensor1dFFNB& in,
+                     cl::Buffer buffer_w_c0, cl::Buffer buffer_w_c1,
+                     cl::Buffer buffer_w_c2,
+                     cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x,
+                     float* ptr_a, float* ptr_result,
+                     cl::Buffer buffer_a, cl::Buffer buffer_result);
+
+// Final vocab projection on FPGA via row chunking (42 kernel calls).
+void MutmulVocabFPGA(Tensor1dLogits& out, const Tensor1d& in,
+                     const WeightsFPGA& wfpga,
+                     cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x,
+                     float* ptr_a, float* ptr_result,
+                     cl::Buffer buffer_a, cl::Buffer buffer_result);
 
 void AddFPGA(Tensor1d& out, const Tensor1d& in, float a, cl::CommandQueue q,
              cl::Kernel kernel_add, float* ptr_a, float* ptr_b,

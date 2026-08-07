@@ -17,6 +17,8 @@ static double g_prof_d2h_ns    = 0;
 static double g_prof_unpack_ns = 0;
 static long long g_prof_calls_288 = 0;
 static long long g_prof_calls_768 = 0;
+static long long g_prof_calls_w2 = 0;
+static long long g_prof_calls_vocab = 0;
 
 static inline double ns_since(const std::chrono::high_resolution_clock::time_point& t0) {
   return (double)std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -31,8 +33,9 @@ void PrintMatmulProfile() {
   auto pct = [&](double x){ return 100.0 * x / total; };
   auto ms  = [](double ns){ return ns / 1e6; };
   printf("\n--- MatmulPt profile ---\n");
-  printf("  calls (288x288 / 288x768) : %lld / %lld\n",
-         g_prof_calls_288, g_prof_calls_768);
+  printf("  calls  288x288 / 288x768 / w2 / vocab : %lld / %lld / %lld / %lld\n",
+         g_prof_calls_288, g_prof_calls_768,
+         g_prof_calls_w2, g_prof_calls_vocab);
   printf("  pack   : %8.2f ms (%5.2f%%)\n", ms(g_prof_pack_ns),   pct(g_prof_pack_ns));
   printf("  h2d    : %8.2f ms (%5.2f%%)  <- enqueueMigrate H->D + finish\n",
          ms(g_prof_h2d_ns),    pct(g_prof_h2d_ns));
@@ -272,9 +275,12 @@ void MatmulParaFPGA(Tensor1d& out1, const Tensor1d& in1, const Tensor2dAttn& w1,
 // Upload all weight matrices to FPGA memory once at startup.
 // After this, per-call MatmulPt288x* only needs to send the input vector.
 void UploadWeightsFPGA(WeightsFPGA& out, const Weights& w,
+                       const Tensor2dTok& tok_emb_table,
                        cl::Context context, cl::CommandQueue q) {
-  const size_t sz_attn = sizeof(Tensor2dAttn);  // 288*288*4 = ~324 KB
-  const size_t sz_ffn  = sizeof(Tensor2dFFNA);  // 768*288*4 = ~864 KB
+  const size_t sz_attn        = sizeof(Tensor2dAttn);  // 288*288*4 = ~324 KB
+  const size_t sz_ffn         = sizeof(Tensor2dFFNA);  // 768*288*4 = ~864 KB
+  const size_t sz_w2_chunk    = kDim * kDim * sizeof(float);  // 288*288*4
+  const size_t sz_vocab_chunk = WeightsFPGA::kVocabChunkRows * kDim * sizeof(float);
 
   auto upload_one = [&](cl::Buffer& dst, const void* src, size_t bytes) {
     cl_int err;
@@ -286,6 +292,8 @@ void UploadWeightsFPGA(WeightsFPGA& out, const Weights& w,
   };
 
   std::vector<cl::Memory> all;
+  std::vector<float> tmp(kDim * kDim);  // scratch for w2 repack
+
   for (int L = 0; L < kNumLayers; L++) {
     upload_one(out.attn_wq[L], w.attn_wq[L], sz_attn);
     upload_one(out.attn_wk[L], w.attn_wk[L], sz_attn);
@@ -299,12 +307,44 @@ void UploadWeightsFPGA(WeightsFPGA& out, const Weights& w,
     all.push_back(out.attn_wo[L]);
     all.push_back(out.ffn_w1[L]);
     all.push_back(out.ffn_w3[L]);
+
+    // Repack FFN w2 into 3 column-chunk sub-matrices.
+    // w2 is [kDim out][kFFNDim in]. Chunk c contains columns [c*kDim, (c+1)*kDim).
+    cl::Buffer* w2_targets[3] = {
+        &out.ffn_w2_c0[L], &out.ffn_w2_c1[L], &out.ffn_w2_c2[L]};
+    for (int c = 0; c < 3; c++) {
+      for (int i = 0; i < kDim; i++) {
+        for (int j = 0; j < kDim; j++) {
+          tmp[i * kDim + j] = w.ffn_w2[L][i][c * kDim + j];
+        }
+      }
+      upload_one(*w2_targets[c], tmp.data(), sz_w2_chunk);
+      all.push_back(*w2_targets[c]);
+    }
   }
+
+  // Repack tok_emb_table into 42 row chunks, last chunk zero-padded.
+  std::vector<float> chunk_buf(WeightsFPGA::kVocabChunkRows * kDim);
+  for (int c = 0; c < WeightsFPGA::kVocabChunks; c++) {
+    std::fill(chunk_buf.begin(), chunk_buf.end(), 0.0f);
+    for (int r = 0; r < WeightsFPGA::kVocabChunkRows; r++) {
+      int global_row = c * WeightsFPGA::kVocabChunkRows + r;
+      if (global_row >= kVocabSize) break;
+      for (int j = 0; j < kDim; j++) {
+        chunk_buf[r * kDim + j] = tok_emb_table[global_row][j];
+      }
+    }
+    upload_one(out.tok_emb[c], chunk_buf.data(), sz_vocab_chunk);
+    all.push_back(out.tok_emb[c]);
+  }
+
   q.enqueueMigrateMemObjects(all, 0);
   q.finish();
+
+  size_t total_bytes = kNumLayers * (4 * sz_attn + 2 * sz_ffn + 3 * sz_w2_chunk)
+                     + WeightsFPGA::kVocabChunks * sz_vocab_chunk;
   printf("UploadWeightsFPGA: %zu buffers, %.2f MB total\n",
-         all.size(),
-         (kNumLayers * (4 * sz_attn + 2 * sz_ffn)) / (1024.0 * 1024.0));
+         all.size(), total_bytes / (1024.0 * 1024.0));
 }
 
 // Compute the matrix multiplication of two input tensors.
@@ -384,6 +424,106 @@ void MatmulPt288x768(Tensor1dFFNB& out, const Tensor1d& in,
   }
   g_prof_unpack_ns += ns_since(t0);
   g_prof_calls_768++;
+}
+
+// FFN w2 via column chunking.
+// out[288] = w2[288][768] . in[768]
+//         = sum_c w2[:, c*288..(c+1)*288-1] . in[c*288..(c+1)*288-1]  (c=0..2)
+// 3 kernel launches, each producing a partial [288] which we sum on host.
+void MatmulFFNw2FPGA(Tensor1d& out, const Tensor1dFFNB& in,
+                     cl::Buffer buffer_w_c0, cl::Buffer buffer_w_c1,
+                     cl::Buffer buffer_w_c2,
+                     cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x,
+                     float* ptr_a, float* ptr_result,
+                     cl::Buffer buffer_a, cl::Buffer buffer_result) {
+  cl::Buffer* chunks[3] = {&buffer_w_c0, &buffer_w_c1, &buffer_w_c2};
+  float acc[kDim];
+  for (int i = 0; i < kDim; i++) acc[i] = 0.0f;
+
+  for (int c = 0; c < 3; c++) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    // Slice c of input: in[c*kDim .. c*kDim + kDim - 1]
+    for (int i = 0; i < kDim; i++) {
+      ptr_a[i] = in[c * kDim + i];
+    }
+    g_prof_pack_ns += ns_since(t0);
+
+    t0 = std::chrono::high_resolution_clock::now();
+    q.enqueueMigrateMemObjects({buffer_a}, 0);
+    q.finish();
+    g_prof_h2d_ns += ns_since(t0);
+
+    kernel_matmul_pt_288x.setArg(1, *chunks[c]);
+    kernel_matmul_pt_288x.setArg(3, kDim);
+    t0 = std::chrono::high_resolution_clock::now();
+    q.enqueueTask(kernel_matmul_pt_288x);
+    q.finish();
+    g_prof_kernel_ns += ns_since(t0);
+
+    t0 = std::chrono::high_resolution_clock::now();
+    q.enqueueMigrateMemObjects({buffer_result}, CL_MIGRATE_MEM_OBJECT_HOST);
+    q.finish();
+    g_prof_d2h_ns += ns_since(t0);
+
+    t0 = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < kDim; i++) {
+      acc[i] += ptr_result[i];
+    }
+    g_prof_unpack_ns += ns_since(t0);
+  }
+
+  for (int i = 0; i < kDim; i++) out[i] = acc[i];
+  g_prof_calls_w2++;
+}
+
+// Final vocab projection via row chunking.
+// out[32000] = tok_emb[32000][288] . in[288]
+// Split output rows into 42 chunks of 768. Input sent once, kernel runs 42 times.
+void MutmulVocabFPGA(Tensor1dLogits& out, const Tensor1d& in,
+                     const WeightsFPGA& wfpga,
+                     cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x,
+                     float* ptr_a, float* ptr_result,
+                     cl::Buffer buffer_a, cl::Buffer buffer_result) {
+  // Input vector: send once.
+  auto t0 = std::chrono::high_resolution_clock::now();
+  for (int i = 0; i < kDim; i++) {
+    ptr_a[i] = in[i];
+  }
+  g_prof_pack_ns += ns_since(t0);
+
+  t0 = std::chrono::high_resolution_clock::now();
+  q.enqueueMigrateMemObjects({buffer_a}, 0);
+  q.finish();
+  g_prof_h2d_ns += ns_since(t0);
+
+  const int kChunks    = WeightsFPGA::kVocabChunks;
+  const int kChunkRows = WeightsFPGA::kVocabChunkRows;
+
+  for (int c = 0; c < kChunks; c++) {
+    kernel_matmul_pt_288x.setArg(1, wfpga.tok_emb[c]);
+    kernel_matmul_pt_288x.setArg(3, kChunkRows);
+
+    t0 = std::chrono::high_resolution_clock::now();
+    q.enqueueTask(kernel_matmul_pt_288x);
+    q.finish();
+    g_prof_kernel_ns += ns_since(t0);
+
+    t0 = std::chrono::high_resolution_clock::now();
+    q.enqueueMigrateMemObjects({buffer_result}, CL_MIGRATE_MEM_OBJECT_HOST);
+    q.finish();
+    g_prof_d2h_ns += ns_since(t0);
+
+    t0 = std::chrono::high_resolution_clock::now();
+    int start = c * kChunkRows;
+    int end   = start + kChunkRows;
+    if (end > kVocabSize) end = kVocabSize;
+    for (int r = 0; r < end - start; r++) {
+      out[start + r] = ptr_result[r];
+    }
+    g_prof_unpack_ns += ns_since(t0);
+  }
+
+  g_prof_calls_vocab++;
 }
 
 /* ---------------------------------  /
