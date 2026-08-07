@@ -2,6 +2,7 @@
 
 #ifndef USE_CPU_ONLY
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -309,13 +310,20 @@ void UploadWeightsFPGA(WeightsFPGA& out, const Weights& w,
     all.push_back(out.ffn_w3[L]);
 
     // Repack FFN w2 into 3 column-chunk sub-matrices.
-    // w2 is [kDim out][kFFNDim in]. Chunk c contains columns [c*kDim, (c+1)*kDim).
+    // w2 is [kDim out][kFFNDim in] with kFFNDim=768 = 2*288+192, so
+    // 3 chunks of 288 columns (864) exceed the 768 valid columns.
+    // Only columns [c*288, min((c+1)*288, 768)) are real; the last 96
+    // columns of chunk 2 are zero-padded so all 3 sub-matrices are
+    // exactly [kDim][kDim] and the kernel never reads out of bounds.
     cl::Buffer* w2_targets[3] = {
         &out.ffn_w2_c0[L], &out.ffn_w2_c1[L], &out.ffn_w2_c2[L]};
     for (int c = 0; c < 3; c++) {
+      int col_begin = c * kDim;
+      int col_end = std::min(col_begin + kDim, kFFNDim);
+      std::fill(tmp.begin(), tmp.end(), 0.0f);
       for (int i = 0; i < kDim; i++) {
-        for (int j = 0; j < kDim; j++) {
-          tmp[i * kDim + j] = w.ffn_w2[L][i][c * kDim + j];
+        for (int j = col_begin; j < col_end; j++) {
+          tmp[i * kDim + (j - col_begin)] = w.ffn_w2[L][i][j];
         }
       }
       upload_one(*w2_targets[c], tmp.data(), sz_w2_chunk);
@@ -442,9 +450,12 @@ void MatmulFFNw2FPGA(Tensor1d& out, const Tensor1dFFNB& in,
 
   for (int c = 0; c < 3; c++) {
     auto t0 = std::chrono::high_resolution_clock::now();
-    // Slice c of input: in[c*kDim .. c*kDim + kDim - 1]
+    // Slice c of input: in[c*kDim .. min((c+1)*kDim, kFFNDim)-1],
+    // zero-padded to kDim (chunk 2 has only 192 valid columns).
+    int col_begin = c * kDim;
     for (int i = 0; i < kDim; i++) {
-      ptr_a[i] = in[c * kDim + i];
+      int idx = col_begin + i;
+      ptr_a[i] = (idx < kFFNDim) ? in[idx] : 0.0f;
     }
     g_prof_pack_ns += ns_since(t0);
 
