@@ -159,17 +159,18 @@ int main(int argc, char* argv[]) {
   cl_int err;
   cl::Context context;
   cl::CommandQueue q;
-  cl::CommandQueue q1;
-  cl::CommandQueue q2;
-  cl::CommandQueue q3;
-  cl::Kernel kernel_matmul_1;
-  cl::Kernel kernel_matmul_2;
-  cl::Kernel kernel_matmul_3;
-  cl::Kernel kernel_mul;
-  cl::Kernel kernel_rmsnorm;
-  cl::Kernel kernel_softmax;
-  cl::Kernel kernel_add;
-  cl::Kernel kernel_rope;
+  // cl::CommandQueue q1;
+  // cl::CommandQueue q2;
+  // cl::CommandQueue q3;
+  // cl::Kernel kernel_matmul_1;
+  // cl::Kernel kernel_matmul_2;
+  // cl::Kernel kernel_matmul_3;
+  // cl::Kernel kernel_mul;
+  // cl::Kernel kernel_rmsnorm;
+  // cl::Kernel kernel_softmax;
+  // cl::Kernel kernel_add;
+  // cl::Kernel kernel_rope;
+  cl::Kernel kernel_matmul_pt_288x;
   cl::Program program;
   std::vector<cl::Platform> platforms;
   bool found_device = false;
@@ -221,12 +222,12 @@ int main(int argc, char* argv[]) {
               context = cl::Context(device, nullptr, nullptr, nullptr, &err));
     OCL_CHECK(err, q = cl::CommandQueue(context, device,
                                         CL_QUEUE_PROFILING_ENABLE, &err));
-    OCL_CHECK(err, q1 = cl::CommandQueue(context, device,
-                                         CL_QUEUE_PROFILING_ENABLE, &err));
-    OCL_CHECK(err, q2 = cl::CommandQueue(context, device,
-                                         CL_QUEUE_PROFILING_ENABLE, &err));
-    OCL_CHECK(err, q3 = cl::CommandQueue(context, device,
-                                         CL_QUEUE_PROFILING_ENABLE, &err));
+    // OCL_CHECK(err, q1 = cl::CommandQueue(context, device,
+    //                                      CL_QUEUE_PROFILING_ENABLE, &err));
+    // OCL_CHECK(err, q2 = cl::CommandQueue(context, device,
+    //                                      CL_QUEUE_PROFILING_ENABLE, &err));
+    // OCL_CHECK(err, q3 = cl::CommandQueue(context, device,
+    //                                      CL_QUEUE_PROFILING_ENABLE, &err));
     std::cout << "Trying to program device[" << i
               << "]: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
     cl::Program program(context, {device}, bins, nullptr, &err);
@@ -234,27 +235,30 @@ int main(int argc, char* argv[]) {
       std::cout << "Failed to program device[" << i << "] with xclbin file!\n";
     } else {
       std::cout << "Device[" << i << "]: program successful!\n";
+      // OCL_CHECK(err,
+      //           kernel_matmul_1 = cl::Kernel(program, "kernel_matmul:{kernel_matmul_1}", &err));
+      // std::cout << "load : kernel_matmul_1" << std::endl;
+      // OCL_CHECK(err,
+      //           kernel_matmul_2 = cl::Kernel(program, "kernel_matmul:{kernel_matmul_2}", &err));
+      // std::cout << "load : kernel_matmul_2" << std::endl;
+      // OCL_CHECK(err,
+      //           kernel_matmul_3 = cl::Kernel(program, "kernel_matmul:{kernel_matmul_3}", &err));
+      // std::cout << "load : kernel_matmul_3" << std::endl;
+      // OCL_CHECK(err, kernel_mul = cl::Kernel(program, "kernel_mul", &err));
+      // std::cout << "load : kernel_mul" << std::endl;
+      // OCL_CHECK(err,
+      //           kernel_rmsnorm = cl::Kernel(program, "kernel_rmsnorm", &err));
+      // std::cout << "load : kernel_rmsnorm" << std::endl;
+      // OCL_CHECK(err,
+      //           kernel_softmax = cl::Kernel(program, "kernel_softmax", &err));
+      // std::cout << "load : kernel_softmax" << std::endl;
+      // OCL_CHECK(err, kernel_add = cl::Kernel(program, "kernel_add", &err));
+      // std::cout << "load : kernel_add" << std::endl;
+      // OCL_CHECK(err, kernel_rope = cl::Kernel(program, "kernel_rope", &err));
+      // std::cout << "load : kernel_rope" << std::endl;
       OCL_CHECK(err,
-                kernel_matmul_1 = cl::Kernel(program, "kernel_matmul:{kernel_matmul_1}", &err));
-      std::cout << "load : kernel_matmul_1" << std::endl;
-      OCL_CHECK(err,
-                kernel_matmul_2 = cl::Kernel(program, "kernel_matmul:{kernel_matmul_2}", &err));
-      std::cout << "load : kernel_matmul_2" << std::endl;
-      OCL_CHECK(err,
-                kernel_matmul_3 = cl::Kernel(program, "kernel_matmul:{kernel_matmul_3}", &err));
-      std::cout << "load : kernel_matmul_3" << std::endl;
-      OCL_CHECK(err, kernel_mul = cl::Kernel(program, "kernel_mul", &err));
-      std::cout << "load : kernel_mul" << std::endl;
-      OCL_CHECK(err,
-                kernel_rmsnorm = cl::Kernel(program, "kernel_rmsnorm", &err));
-      std::cout << "load : kernel_rmsnorm" << std::endl;
-      OCL_CHECK(err,
-                kernel_softmax = cl::Kernel(program, "kernel_softmax", &err));
-      std::cout << "load : kernel_softmax" << std::endl;
-      OCL_CHECK(err, kernel_add = cl::Kernel(program, "kernel_add", &err));
-      std::cout << "load : kernel_add" << std::endl;
-      OCL_CHECK(err, kernel_rope = cl::Kernel(program, "kernel_rope", &err));
-      std::cout << "load : kernel_rope" << std::endl;
+                kernel_matmul_pt_288x = cl::Kernel(program, "kernel_matmul_pt_288x", &err));
+      std::cout << "load : kernel_matmul_pt_288x" << std::endl;
       valid_device = true;
       break; // we break because we found a valid device
     }
@@ -271,145 +275,150 @@ int main(int argc, char* argv[]) {
   OCL_CHECK(err,
             cl::Buffer buffer_b(context, CL_MEM_READ_ONLY,
                                 size_in_bytes * size_in_bytes, NULL, &err));
-  OCL_CHECK(err, cl::Buffer buffer_c(context, CL_MEM_READ_ONLY, size_in_bytes,
-                                     NULL, &err));
-  OCL_CHECK(err, cl::Buffer buffer_d(context, CL_MEM_READ_ONLY, size_in_bytes,
-                                     NULL, &err));
+  // OCL_CHECK(err, cl::Buffer buffer_c(context, CL_MEM_READ_ONLY, size_in_bytes,
+  //                                    NULL, &err));
+  // OCL_CHECK(err, cl::Buffer buffer_d(context, CL_MEM_READ_ONLY, size_in_bytes,
+  //                                    NULL, &err));
   OCL_CHECK(err, cl::Buffer buffer_result(context, CL_MEM_WRITE_ONLY,
                                           size_in_bytes, NULL, &err));
-  OCL_CHECK(err, cl::Buffer buffer_result2(context, CL_MEM_WRITE_ONLY,
-                                           size_in_bytes, NULL, &err));
+  // OCL_CHECK(err, cl::Buffer buffer_result2(context, CL_MEM_WRITE_ONLY,
+  //                                          size_in_bytes, NULL, &err));
 
-  // Matmul Buffer 1
-  OCL_CHECK(err, cl::Buffer buffer_a_1(context, CL_MEM_READ_ONLY, size_in_bytes,
-                                       NULL, &err));
-  OCL_CHECK(err, cl::Buffer buffer_b_1(context, CL_MEM_READ_ONLY,
-                                  size_in_bytes * size_in_bytes, NULL, &err));
-  OCL_CHECK(err, cl::Buffer buffer_result_1(context, CL_MEM_WRITE_ONLY,
-                                            size_in_bytes, NULL, &err));
+  // // Matmul Buffer 1
+  // OCL_CHECK(err, cl::Buffer buffer_a_1(context, CL_MEM_READ_ONLY, size_in_bytes,
+  //                                      NULL, &err));
+  // OCL_CHECK(err, cl::Buffer buffer_b_1(context, CL_MEM_READ_ONLY,
+  //                                 size_in_bytes * size_in_bytes, NULL, &err));
+  // OCL_CHECK(err, cl::Buffer buffer_result_1(context, CL_MEM_WRITE_ONLY,
+  //                                           size_in_bytes, NULL, &err));
 
-  // Matmul Buffer 2
-  OCL_CHECK(err, cl::Buffer buffer_a_2(context, CL_MEM_READ_ONLY, size_in_bytes,
-                                       NULL, &err));
-  OCL_CHECK(err, cl::Buffer buffer_b_2(context, CL_MEM_READ_ONLY,
-                                  size_in_bytes * size_in_bytes, NULL, &err));
-  OCL_CHECK(err, cl::Buffer buffer_result_2(context, CL_MEM_WRITE_ONLY,
-                                            size_in_bytes, NULL, &err));
+  // // Matmul Buffer 2
+  // OCL_CHECK(err, cl::Buffer buffer_a_2(context, CL_MEM_READ_ONLY, size_in_bytes,
+  //                                      NULL, &err));
+  // OCL_CHECK(err, cl::Buffer buffer_b_2(context, CL_MEM_READ_ONLY,
+  //                                 size_in_bytes * size_in_bytes, NULL, &err));
+  // OCL_CHECK(err, cl::Buffer buffer_result_2(context, CL_MEM_WRITE_ONLY,
+  //                                           size_in_bytes, NULL, &err));
 
-  // Matmul Buffer 3
-  OCL_CHECK(err, cl::Buffer buffer_a_3(context, CL_MEM_READ_ONLY, size_in_bytes,
-                                       NULL, &err));
-  OCL_CHECK(err, cl::Buffer buffer_b_3(context, CL_MEM_READ_ONLY,
-                                  size_in_bytes * size_in_bytes, NULL, &err));
-  OCL_CHECK(err, cl::Buffer buffer_result_3(context, CL_MEM_WRITE_ONLY,
-                                            size_in_bytes, NULL, &err));
+  // // Matmul Buffer 3
+  // OCL_CHECK(err, cl::Buffer buffer_a_3(context, CL_MEM_READ_ONLY, size_in_bytes,
+  //                                      NULL, &err));
+  // OCL_CHECK(err, cl::Buffer buffer_b_3(context, CL_MEM_READ_ONLY,
+  //                                 size_in_bytes * size_in_bytes, NULL, &err));
+  // OCL_CHECK(err, cl::Buffer buffer_result_3(context, CL_MEM_WRITE_ONLY,
+  //                                           size_in_bytes, NULL, &err));
 
   // set the kernel Arguments
-  OCL_CHECK(err, err = kernel_rmsnorm.setArg(0, buffer_a));
-  OCL_CHECK(err, err = kernel_rmsnorm.setArg(1, buffer_b));
-  OCL_CHECK(err, err = kernel_rmsnorm.setArg(2, buffer_result));
+  // OCL_CHECK(err, err = kernel_rmsnorm.setArg(0, buffer_a));
+  // OCL_CHECK(err, err = kernel_rmsnorm.setArg(1, buffer_b));
+  // OCL_CHECK(err, err = kernel_rmsnorm.setArg(2, buffer_result));
 
-  OCL_CHECK(err, err = kernel_matmul_1.setArg(0, buffer_a_1));
-  OCL_CHECK(err, err = kernel_matmul_1.setArg(1, buffer_b_1));
-  OCL_CHECK(err, err = kernel_matmul_1.setArg(2, buffer_result_1));
-  OCL_CHECK(err, err = kernel_matmul_1.setArg(3, swan::kDim));
-  OCL_CHECK(err, err = kernel_matmul_1.setArg(4, swan::kDim));
+  // OCL_CHECK(err, err = kernel_matmul_1.setArg(0, buffer_a_1));
+  // OCL_CHECK(err, err = kernel_matmul_1.setArg(1, buffer_b_1));
+  // OCL_CHECK(err, err = kernel_matmul_1.setArg(2, buffer_result_1));
+  // OCL_CHECK(err, err = kernel_matmul_1.setArg(3, swan::kDim));
+  // OCL_CHECK(err, err = kernel_matmul_1.setArg(4, swan::kDim));
 
-  OCL_CHECK(err, err = kernel_matmul_2.setArg(0, buffer_a_2));
-  OCL_CHECK(err, err = kernel_matmul_2.setArg(1, buffer_b_2));
-  OCL_CHECK(err, err = kernel_matmul_2.setArg(2, buffer_result_2));
-  OCL_CHECK(err, err = kernel_matmul_2.setArg(3, swan::kDim));
-  OCL_CHECK(err, err = kernel_matmul_2.setArg(4, swan::kDim));
+  // OCL_CHECK(err, err = kernel_matmul_2.setArg(0, buffer_a_2));
+  // OCL_CHECK(err, err = kernel_matmul_2.setArg(1, buffer_b_2));
+  // OCL_CHECK(err, err = kernel_matmul_2.setArg(2, buffer_result_2));
+  // OCL_CHECK(err, err = kernel_matmul_2.setArg(3, swan::kDim));
+  // OCL_CHECK(err, err = kernel_matmul_2.setArg(4, swan::kDim));
 
-  OCL_CHECK(err, err = kernel_matmul_3.setArg(0, buffer_a_3));
-  OCL_CHECK(err, err = kernel_matmul_3.setArg(1, buffer_b_3));
-  OCL_CHECK(err, err = kernel_matmul_3.setArg(2, buffer_result_3));
-  OCL_CHECK(err, err = kernel_matmul_3.setArg(3, swan::kDim));
-  OCL_CHECK(err, err = kernel_matmul_3.setArg(4, swan::kDim));
+  // OCL_CHECK(err, err = kernel_matmul_3.setArg(0, buffer_a_3));
+  // OCL_CHECK(err, err = kernel_matmul_3.setArg(1, buffer_b_3));
+  // OCL_CHECK(err, err = kernel_matmul_3.setArg(2, buffer_result_3));
+  // OCL_CHECK(err, err = kernel_matmul_3.setArg(3, swan::kDim));
+  // OCL_CHECK(err, err = kernel_matmul_3.setArg(4, swan::kDim));
 
-  OCL_CHECK(err, err = kernel_mul.setArg(0, buffer_a));
-  OCL_CHECK(err, err = kernel_mul.setArg(1, buffer_b));
-  OCL_CHECK(err, err = kernel_mul.setArg(2, buffer_result));
+  // OCL_CHECK(err, err = kernel_mul.setArg(0, buffer_a));
+  // OCL_CHECK(err, err = kernel_mul.setArg(1, buffer_b));
+  // OCL_CHECK(err, err = kernel_mul.setArg(2, buffer_result));
 
-  OCL_CHECK(err, err = kernel_add.setArg(0, buffer_a));
-  OCL_CHECK(err, err = kernel_add.setArg(1, buffer_b));
-  OCL_CHECK(err, err = kernel_add.setArg(2, buffer_result));
+  // OCL_CHECK(err, err = kernel_add.setArg(0, buffer_a));
+  // OCL_CHECK(err, err = kernel_add.setArg(1, buffer_b));
+  // OCL_CHECK(err, err = kernel_add.setArg(2, buffer_result));
 
-  OCL_CHECK(err, err = kernel_softmax.setArg(0, buffer_a));
-  OCL_CHECK(err, err = kernel_softmax.setArg(1, buffer_result));
+  // OCL_CHECK(err, err = kernel_softmax.setArg(0, buffer_a));
+  // OCL_CHECK(err, err = kernel_softmax.setArg(1, buffer_result));
 
-  OCL_CHECK(err, err = kernel_rope.setArg(0, buffer_a));
-  OCL_CHECK(err, err = kernel_rope.setArg(1, buffer_b));
-  OCL_CHECK(err, err = kernel_rope.setArg(2, buffer_c));
-  OCL_CHECK(err, err = kernel_rope.setArg(3, buffer_d));
-  OCL_CHECK(err, err = kernel_rope.setArg(4, buffer_result));
-  OCL_CHECK(err, err = kernel_rope.setArg(5, buffer_result2));
-  OCL_CHECK(err, err = kernel_rope.setArg(6, 1));
+  // OCL_CHECK(err, err = kernel_rope.setArg(0, buffer_a));
+  // OCL_CHECK(err, err = kernel_rope.setArg(1, buffer_b));
+  // OCL_CHECK(err, err = kernel_rope.setArg(2, buffer_c));
+  // OCL_CHECK(err, err = kernel_rope.setArg(3, buffer_d));
+  // OCL_CHECK(err, err = kernel_rope.setArg(4, buffer_result));
+  // OCL_CHECK(err, err = kernel_rope.setArg(5, buffer_result2));
+  // OCL_CHECK(err, err = kernel_rope.setArg(6, 1));
+
+  OCL_CHECK(err, err = kernel_matmul_pt_288x.setArg(0, buffer_a));
+  OCL_CHECK(err, err = kernel_matmul_pt_288x.setArg(1, buffer_b));
+  OCL_CHECK(err, err = kernel_matmul_pt_288x.setArg(2, buffer_result));
+  OCL_CHECK(err, err = kernel_matmul_pt_288x.setArg(3, swan::kDim));
 
   // We then need to map our OpenCL buffer5 to get the pointers
   float* ptr_a;
   float* ptr_b;
-  float* ptr_c;
-  float* ptr_d;
+  // float* ptr_c;
+  // float* ptr_d;
   float* ptr_result;
-  float* ptr_result2;
-  float* ptr_a_1;
-  float* ptr_b_1;
-  float* ptr_result_1;
-  float* ptr_a_2;
-  float* ptr_b_2;
-  float* ptr_result_2;
-  float* ptr_a_3;
-  float* ptr_b_3;
-  float* ptr_result_3;
+  // float* ptr_result2;
+  // float* ptr_a_1;
+  // float* ptr_b_1;
+  // float* ptr_result_1;
+  // float* ptr_a_2;
+  // float* ptr_b_2;
+  // float* ptr_result_2;
+  // float* ptr_a_3;
+  // float* ptr_b_3;
+  // float* ptr_result_3;
   OCL_CHECK(err, ptr_a = (float*)q.enqueueMapBuffer(
                      buffer_a, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
                      NULL, &err));
   OCL_CHECK(err, ptr_b = (float*)q.enqueueMapBuffer(
                      buffer_b, CL_TRUE, CL_MAP_WRITE, 0,
                      size_in_bytes * size_in_bytes, NULL, NULL, &err));
-  OCL_CHECK(err, ptr_c = (float*)q.enqueueMapBuffer(
-                     buffer_c, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
-                     NULL, &err));
-  OCL_CHECK(err, ptr_d = (float*)q.enqueueMapBuffer(
-                     buffer_d, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
-                     NULL, &err));
+  // OCL_CHECK(err, ptr_c = (float*)q.enqueueMapBuffer(
+  //                    buffer_c, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
+  //                    NULL, &err));
+  // OCL_CHECK(err, ptr_d = (float*)q.enqueueMapBuffer(
+  //                    buffer_d, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
+  //                    NULL, &err));
   OCL_CHECK(err, ptr_result = (float*)q.enqueueMapBuffer(
                      buffer_result, CL_TRUE, CL_MAP_READ, 0, size_in_bytes,
                      NULL, NULL, &err));
-  OCL_CHECK(err, ptr_result2 = (float*)q.enqueueMapBuffer(
-                     buffer_result2, CL_TRUE, CL_MAP_READ, 0, size_in_bytes,
-                     NULL, NULL, &err));
+  // OCL_CHECK(err, ptr_result2 = (float*)q.enqueueMapBuffer(
+  //                    buffer_result2, CL_TRUE, CL_MAP_READ, 0, size_in_bytes,
+  //                    NULL, NULL, &err));
 
-  OCL_CHECK(err, ptr_a_1 = (float*)q1.enqueueMapBuffer(
-                     buffer_a_1, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
-                     NULL, &err));
-  OCL_CHECK(err, ptr_b_1 = (float*)q1.enqueueMapBuffer(
-                     buffer_b_1, CL_TRUE, CL_MAP_WRITE, 0,
-                     size_in_bytes * size_in_bytes, NULL, NULL, &err));
-  OCL_CHECK(err, ptr_result_1 = (float*)q1.enqueueMapBuffer(
-                     buffer_result_1, CL_TRUE, CL_MAP_READ, 0, size_in_bytes,
-                     NULL, NULL, &err));
+  // OCL_CHECK(err, ptr_a_1 = (float*)q1.enqueueMapBuffer(
+  //                    buffer_a_1, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
+  //                    NULL, &err));
+  // OCL_CHECK(err, ptr_b_1 = (float*)q1.enqueueMapBuffer(
+  //                    buffer_b_1, CL_TRUE, CL_MAP_WRITE, 0,
+  //                    size_in_bytes * size_in_bytes, NULL, NULL, &err));
+  // OCL_CHECK(err, ptr_result_1 = (float*)q1.enqueueMapBuffer(
+  //                    buffer_result_1, CL_TRUE, CL_MAP_READ, 0, size_in_bytes,
+  //                    NULL, NULL, &err));
 
-  OCL_CHECK(err, ptr_a_2 = (float*)q2.enqueueMapBuffer(
-                     buffer_a_2, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
-                     NULL, &err));
-  OCL_CHECK(err, ptr_b_2 = (float*)q2.enqueueMapBuffer(
-                     buffer_b_2, CL_TRUE, CL_MAP_WRITE, 0,
-                     size_in_bytes * size_in_bytes, NULL, NULL, &err));
-  OCL_CHECK(err, ptr_result_2 = (float*)q2.enqueueMapBuffer(
-                     buffer_result_2, CL_TRUE, CL_MAP_READ, 0, size_in_bytes,
-                     NULL, NULL, &err));
+  // OCL_CHECK(err, ptr_a_2 = (float*)q2.enqueueMapBuffer(
+  //                    buffer_a_2, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
+  //                    NULL, &err));
+  // OCL_CHECK(err, ptr_b_2 = (float*)q2.enqueueMapBuffer(
+  //                    buffer_b_2, CL_TRUE, CL_MAP_WRITE, 0,
+  //                    size_in_bytes * size_in_bytes, NULL, NULL, &err));
+  // OCL_CHECK(err, ptr_result_2 = (float*)q2.enqueueMapBuffer(
+  //                    buffer_result_2, CL_TRUE, CL_MAP_READ, 0, size_in_bytes,
+  //                    NULL, NULL, &err));
 
-  OCL_CHECK(err, ptr_a_3 = (float*)q3.enqueueMapBuffer(
-                     buffer_a_3, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
-                     NULL, &err));
-  OCL_CHECK(err, ptr_b_3 = (float*)q3.enqueueMapBuffer(
-                     buffer_b_3, CL_TRUE, CL_MAP_WRITE, 0,
-                     size_in_bytes * size_in_bytes, NULL, NULL, &err));
-  OCL_CHECK(err, ptr_result_3 = (float*)q3.enqueueMapBuffer(
-                     buffer_result_3, CL_TRUE, CL_MAP_READ, 0, size_in_bytes,
-                     NULL, NULL, &err));
+  // OCL_CHECK(err, ptr_a_3 = (float*)q3.enqueueMapBuffer(
+  //                    buffer_a_3, CL_TRUE, CL_MAP_WRITE, 0, size_in_bytes, NULL,
+  //                    NULL, &err));
+  // OCL_CHECK(err, ptr_b_3 = (float*)q3.enqueueMapBuffer(
+  //                    buffer_b_3, CL_TRUE, CL_MAP_WRITE, 0,
+  //                    size_in_bytes * size_in_bytes, NULL, NULL, &err));
+  // OCL_CHECK(err, ptr_result_3 = (float*)q3.enqueueMapBuffer(
+  //                    buffer_result_3, CL_TRUE, CL_MAP_READ, 0, size_in_bytes,
+  //                    NULL, NULL, &err));
 #endif // USE_CPU_ONLY
 
   // 6. Decode
@@ -435,21 +444,9 @@ int main(int argc, char* argv[]) {
 #ifndef USE_CPU_ONLY
                  ,
                  q,
-                 q1, q2, q3,
-                 kernel_matmul_1, kernel_matmul_2, kernel_matmul_3,
-                 kernel_mul,
-                 kernel_rmsnorm, kernel_softmax,
-                 kernel_add, kernel_rope,
-                 ptr_a, ptr_b, ptr_c, ptr_d, ptr_result, ptr_result2,
-                 ptr_a_1, ptr_b_1, ptr_result_1,
-                 ptr_a_2, ptr_b_2, ptr_result_2,
-                 ptr_a_3, ptr_b_3, ptr_result_3,
-                 buffer_a, buffer_b,
-                 buffer_c, buffer_d, buffer_result,
-                 buffer_result2,
-                 buffer_a_1, buffer_b_1, buffer_result_1,
-                 buffer_a_2, buffer_b_2, buffer_result_2,
-                 buffer_a_3, buffer_b_3, buffer_result_3
+                 kernel_matmul_pt_288x,
+                 ptr_a, ptr_b, ptr_result,
+                 buffer_a, buffer_b, buffer_result
 #endif // USE_CPU_ONLY
     );
 
@@ -504,21 +501,21 @@ int main(int argc, char* argv[]) {
   OCL_CHECK(err, err = q.enqueueUnmapMemObject(buffer_result, ptr_result));
   OCL_CHECK(err, err = q.finish());
 
-  OCL_CHECK(err, err = q1.enqueueUnmapMemObject(buffer_a_1, ptr_a_1));
-  OCL_CHECK(err, err = q1.enqueueUnmapMemObject(buffer_b_1, ptr_b_1));
-  OCL_CHECK(err, err = q1.enqueueUnmapMemObject(buffer_result_1, ptr_result_1));
+  // OCL_CHECK(err, err = q1.enqueueUnmapMemObject(buffer_a_1, ptr_a_1));
+  // OCL_CHECK(err, err = q1.enqueueUnmapMemObject(buffer_b_1, ptr_b_1));
+  // OCL_CHECK(err, err = q1.enqueueUnmapMemObject(buffer_result_1, ptr_result_1));
 
-  OCL_CHECK(err, err = q2.enqueueUnmapMemObject(buffer_a_2, ptr_a_2));
-  OCL_CHECK(err, err = q2.enqueueUnmapMemObject(buffer_b_2, ptr_b_2));
-  OCL_CHECK(err, err = q2.enqueueUnmapMemObject(buffer_result_2, ptr_result_2));
+  // OCL_CHECK(err, err = q2.enqueueUnmapMemObject(buffer_a_2, ptr_a_2));
+  // OCL_CHECK(err, err = q2.enqueueUnmapMemObject(buffer_b_2, ptr_b_2));
+  // OCL_CHECK(err, err = q2.enqueueUnmapMemObject(buffer_result_2, ptr_result_2));
 
-  OCL_CHECK(err, err = q3.enqueueUnmapMemObject(buffer_a_3, ptr_a_3));
-  OCL_CHECK(err, err = q3.enqueueUnmapMemObject(buffer_b_3, ptr_b_3));
-  OCL_CHECK(err, err = q3.enqueueUnmapMemObject(buffer_result_3, ptr_result_3));
+  // OCL_CHECK(err, err = q3.enqueueUnmapMemObject(buffer_a_3, ptr_a_3));
+  // OCL_CHECK(err, err = q3.enqueueUnmapMemObject(buffer_b_3, ptr_b_3));
+  // OCL_CHECK(err, err = q3.enqueueUnmapMemObject(buffer_result_3, ptr_result_3));
 
-  OCL_CHECK(err, err = q1.finish());
-  OCL_CHECK(err, err = q2.finish());
-  OCL_CHECK(err, err = q3.finish());
+  // OCL_CHECK(err, err = q1.finish());
+  // OCL_CHECK(err, err = q2.finish());
+  // OCL_CHECK(err, err = q3.finish());
 #endif // USE_CPU_ONLY
 
   // 7. Print the time and speed.

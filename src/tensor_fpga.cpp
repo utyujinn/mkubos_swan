@@ -229,6 +229,57 @@ void MatmulParaFPGA(Tensor1d& out1, const Tensor1d& in1, const Tensor2dAttn& w1,
   }
 }
 
+// Compute the matrix multiplication of two input tensors.
+// Tensor1d [dim] . Tensor2dAttn [dim, dim] = Tensor1d [dim]
+// out[i] = w[i,j] . in[j]
+void MatmulPt288x288(Tensor1d& out, const Tensor1d& in, const Tensor2dAttn& w,
+                cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x, float* ptr_a,
+                float* ptr_b, float* ptr_result, cl::Buffer buffer_a,
+                cl::Buffer buffer_b, cl::Buffer buffer_result) {
+  for (int i = 0; i < kDim; i++) {
+    ptr_a[i] = in[i];
+  }
+  for (int i = 0; i < kDim; i++) {
+    for (int j = 0; j < kDim; j++) {
+      ptr_b[i * kDim + j] = w[i][j];
+    }
+  }
+  q.enqueueMigrateMemObjects({buffer_a, buffer_b}, 0);
+  kernel_matmul_pt_288x.setArg(3, kDim);
+  // kernel_matmul.setArg(4, kDim);
+  q.enqueueTask(kernel_matmul_pt_288x);
+  q.enqueueMigrateMemObjects({buffer_result}, CL_MIGRATE_MEM_OBJECT_HOST);
+  q.finish();
+  for (int i = 0; i < kDim; i++) {
+    out[i] = ptr_result[i];
+  }
+}
+// Compute the matrix multiplication of two input tensors.
+// Tensor1dFFNB [ffn_dim] . Tensor2dFFNA [ffn_dim, dim] = Tensor1dFFNB [ffn_dim]
+// out[i] = w[i,j] . in[j]
+void MatmulPt288x768(Tensor1dFFNB& out, const Tensor1d& in, const Tensor2dFFNA& w,
+                cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x, float* ptr_a,
+                float* ptr_b, float* ptr_result, cl::Buffer buffer_a,
+                cl::Buffer buffer_b, cl::Buffer buffer_result) {
+  for (int i = 0; i < kDim; i++) {
+    ptr_a[i] = in[i];
+  }
+  for (int i = 0; i < kFFNDim; i++) {
+    for (int j = 0; j < kDim; j++) {
+      ptr_b[i * kDim + j] = w[i][j];
+    }
+  }
+  q.enqueueMigrateMemObjects({buffer_a, buffer_b}, 0);
+  kernel_matmul_pt_288x.setArg(3, kFFNDim);
+  // kernel_matmul.setArg(4, kFFNDim);
+  q.enqueueTask(kernel_matmul_pt_288x);
+  q.enqueueMigrateMemObjects({buffer_result}, CL_MIGRATE_MEM_OBJECT_HOST);
+  q.finish();
+  for (int i = 0; i < kFFNDim; i++) {
+    out[i] = ptr_result[i];
+  }
+}
+
 /* ---------------------------------  /
       Normalization Operations
 /  --------------------------------- */
