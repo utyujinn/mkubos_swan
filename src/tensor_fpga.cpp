@@ -2,7 +2,45 @@
 
 #ifndef USE_CPU_ONLY
 
+#include <chrono>
+#include <cstdio>
+
 namespace swan {
+
+// ---- Profiling accumulators (nanoseconds) ----
+static double g_prof_pack_ns   = 0;
+static double g_prof_h2d_ns    = 0;
+static double g_prof_kernel_ns = 0;
+static double g_prof_d2h_ns    = 0;
+static double g_prof_unpack_ns = 0;
+static long long g_prof_calls_288 = 0;
+static long long g_prof_calls_768 = 0;
+
+static inline double ns_since(const std::chrono::high_resolution_clock::time_point& t0) {
+  return (double)std::chrono::duration_cast<std::chrono::nanoseconds>(
+           std::chrono::high_resolution_clock::now() - t0).count();
+}
+
+void PrintMatmulProfile() {
+  double total = g_prof_pack_ns + g_prof_h2d_ns + g_prof_kernel_ns
+               + g_prof_d2h_ns + g_prof_unpack_ns;
+  long long calls = g_prof_calls_288 + g_prof_calls_768;
+  if (calls == 0 || total <= 0) return;
+  auto pct = [&](double x){ return 100.0 * x / total; };
+  auto ms  = [](double ns){ return ns / 1e6; };
+  printf("\n--- MatmulPt profile ---\n");
+  printf("  calls (288x288 / 288x768) : %lld / %lld\n",
+         g_prof_calls_288, g_prof_calls_768);
+  printf("  pack   : %8.2f ms (%5.2f%%)\n", ms(g_prof_pack_ns),   pct(g_prof_pack_ns));
+  printf("  h2d    : %8.2f ms (%5.2f%%)  <- enqueueMigrate H->D + finish\n",
+         ms(g_prof_h2d_ns),    pct(g_prof_h2d_ns));
+  printf("  kernel : %8.2f ms (%5.2f%%)  <- enqueueTask + finish\n",
+         ms(g_prof_kernel_ns), pct(g_prof_kernel_ns));
+  printf("  d2h    : %8.2f ms (%5.2f%%)  <- enqueueMigrate D->H + finish\n",
+         ms(g_prof_d2h_ns),    pct(g_prof_d2h_ns));
+  printf("  unpack : %8.2f ms (%5.2f%%)\n", ms(g_prof_unpack_ns), pct(g_prof_unpack_ns));
+  printf("  TOTAL  : %8.2f ms  (avg %.3f ms / call)\n", ms(total), ms(total)/calls);
+}
 
 /* ---------------------------------  /
       Basic Arithmetic Operations
@@ -236,6 +274,7 @@ void MatmulPt288x288(Tensor1d& out, const Tensor1d& in, const Tensor2dAttn& w,
                 cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x, float* ptr_a,
                 float* ptr_b, float* ptr_result, cl::Buffer buffer_a,
                 cl::Buffer buffer_b, cl::Buffer buffer_result) {
+  auto t0 = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < kDim; i++) {
     ptr_a[i] = in[i];
   }
@@ -244,15 +283,30 @@ void MatmulPt288x288(Tensor1d& out, const Tensor1d& in, const Tensor2dAttn& w,
       ptr_b[i * kDim + j] = w[i][j];
     }
   }
+  g_prof_pack_ns += ns_since(t0);
+
+  t0 = std::chrono::high_resolution_clock::now();
   q.enqueueMigrateMemObjects({buffer_a, buffer_b}, 0);
+  q.finish();
+  g_prof_h2d_ns += ns_since(t0);
+
   kernel_matmul_pt_288x.setArg(3, kDim);
-  // kernel_matmul.setArg(4, kDim);
+  t0 = std::chrono::high_resolution_clock::now();
   q.enqueueTask(kernel_matmul_pt_288x);
+  q.finish();
+  g_prof_kernel_ns += ns_since(t0);
+
+  t0 = std::chrono::high_resolution_clock::now();
   q.enqueueMigrateMemObjects({buffer_result}, CL_MIGRATE_MEM_OBJECT_HOST);
   q.finish();
+  g_prof_d2h_ns += ns_since(t0);
+
+  t0 = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < kDim; i++) {
     out[i] = ptr_result[i];
   }
+  g_prof_unpack_ns += ns_since(t0);
+  g_prof_calls_288++;
 }
 // Compute the matrix multiplication of two input tensors.
 // Tensor1dFFNB [ffn_dim] . Tensor2dFFNA [ffn_dim, dim] = Tensor1dFFNB [ffn_dim]
@@ -261,6 +315,7 @@ void MatmulPt288x768(Tensor1dFFNB& out, const Tensor1d& in, const Tensor2dFFNA& 
                 cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x, float* ptr_a,
                 float* ptr_b, float* ptr_result, cl::Buffer buffer_a,
                 cl::Buffer buffer_b, cl::Buffer buffer_result) {
+  auto t0 = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < kDim; i++) {
     ptr_a[i] = in[i];
   }
@@ -269,15 +324,30 @@ void MatmulPt288x768(Tensor1dFFNB& out, const Tensor1d& in, const Tensor2dFFNA& 
       ptr_b[i * kDim + j] = w[i][j];
     }
   }
+  g_prof_pack_ns += ns_since(t0);
+
+  t0 = std::chrono::high_resolution_clock::now();
   q.enqueueMigrateMemObjects({buffer_a, buffer_b}, 0);
+  q.finish();
+  g_prof_h2d_ns += ns_since(t0);
+
   kernel_matmul_pt_288x.setArg(3, kFFNDim);
-  // kernel_matmul.setArg(4, kFFNDim);
+  t0 = std::chrono::high_resolution_clock::now();
   q.enqueueTask(kernel_matmul_pt_288x);
+  q.finish();
+  g_prof_kernel_ns += ns_since(t0);
+
+  t0 = std::chrono::high_resolution_clock::now();
   q.enqueueMigrateMemObjects({buffer_result}, CL_MIGRATE_MEM_OBJECT_HOST);
   q.finish();
+  g_prof_d2h_ns += ns_since(t0);
+
+  t0 = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < kFFNDim; i++) {
     out[i] = ptr_result[i];
   }
+  g_prof_unpack_ns += ns_since(t0);
+  g_prof_calls_768++;
 }
 
 /* ---------------------------------  /

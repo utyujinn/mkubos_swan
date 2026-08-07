@@ -526,5 +526,9 @@ int main(int argc, char* argv[]) {
             << "Speed: " << args.max_seq / (decode_time/1000.0) << "[tok/s]"
             << std::endl;
 
+#ifndef USE_CPU_ONLY
+  swan::PrintMatmulProfile();
+#endif
+
   return 0;
 }

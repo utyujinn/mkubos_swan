@@ -52,6 +52,9 @@ void MatmulParaFPGA(Tensor1d& out1, const Tensor1d& in1, const Tensor2dAttn& w1,
                 cl::CommandQueue& q2, cl::Kernel kernel_matmul_2, float* ptr_a2, float* ptr_b2, float* ptr_result2, cl::Buffer buffer_a2, cl::Buffer buffer_b2, cl::Buffer buffer_result2,
                 cl::CommandQueue& q3, cl::Kernel kernel_matmul_3, float* ptr_a3, float* ptr_b3, float* ptr_result3, cl::Buffer buffer_a3, cl::Buffer buffer_b3, cl::Buffer buffer_result3);
 
+// Profiling
+void PrintMatmulProfile();
+
 // Added
 void MatmulPt288x288(Tensor1d& out, const Tensor1d& in, const Tensor2dAttn& w,
                 cl::CommandQueue q, cl::Kernel kernel_matmul_pt_288x, float* ptr_a,
